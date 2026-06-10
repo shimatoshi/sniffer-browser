@@ -1,3 +1,7 @@
 build/
 *.png
 verify.mp4
+
+# Pythonキャッシュ
+__pycache__/
+*.pyc
