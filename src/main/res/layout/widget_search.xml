@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Google風の白い検索バー。バー本体タップ=アドレス欄フォーカス / マイクタップ=音声検索 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widgetRoot"
+    android:orientation="horizontal"
+    android:layout_width="match_parent"
+    android:layout_height="48dp"
+    android:background="@drawable/widget_bg_light"
+    android:gravity="center_vertical">
+
+    <!-- バー本体（アイコン＋ヒント）。タップでアドレス欄フォーカス -->
+    <LinearLayout
+        android:id="@+id/widgetBar"
+        android:orientation="horizontal"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:gravity="center_vertical"
+        android:paddingLeft="16dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🔍"
+            android:textSize="17sp" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginLeft="12dp"
+            android:text="Google で検索、または URL を入力"
+            android:textColor="#5F6368"
+            android:textSize="14sp"
+            android:singleLine="true"
+            android:ellipsize="end" />
+    </LinearLayout>
+
+    <!-- 音声検索マイク -->
+    <TextView
+        android:id="@+id/widgetMic"
+        android:layout_width="48dp"
+        android:layout_height="match_parent"
+        android:gravity="center"
+        android:text="🎤"
+        android:textSize="18sp" />
+</LinearLayout>

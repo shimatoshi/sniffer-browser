@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ホーム上の検索オーバーレイ。外側タップで閉じ、上部の白いピルに直接入力 -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/searchScrim"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:clickable="true"
+    android:focusable="true">
+
+    <LinearLayout
+        android:orientation="horizontal"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:layout_gravity="top"
+        android:layout_marginTop="64dp"
+        android:layout_marginLeft="12dp"
+        android:layout_marginRight="12dp"
+        android:background="@drawable/widget_bg_light"
+        android:gravity="center_vertical"
+        android:paddingLeft="16dp"
+        android:elevation="6dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🔍"
+            android:textSize="17sp" />
+
+        <EditText
+            android:id="@+id/searchInput"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginLeft="10dp"
+            android:background="@android:color/transparent"
+            android:hint="Google で検索、または URL を入力"
+            android:textColor="#202124"
+            android:textColorHint="#5F6368"
+            android:textSize="15sp"
+            android:singleLine="true"
+            android:imeOptions="actionGo"
+            android:inputType="text"
+            android:selectAllOnFocus="true" />
+
+        <TextView
+            android:id="@+id/searchMic"
+            android:layout_width="48dp"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:text="🎤"
+            android:textSize="18sp" />
+    </LinearLayout>
+</FrameLayout>

@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 新着記事ウィジェット: ヘッダ(タイトル＋更新) + スクロールする記事リスト -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_panel_bg"
+    android:padding="8dp">
+
+    <LinearLayout
+        android:orientation="horizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:paddingLeft="4dp"
+        android:paddingBottom="6dp">
+
+        <TextView
+            android:id="@+id/articleTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="📰 新着記事"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:textSize="15sp"
+            android:singleLine="true" />
+
+        <TextView
+            android:id="@+id/articleStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginRight="10dp"
+            android:textColor="#8AB4F8"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/articleRefresh"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="↻"
+            android:textColor="#8AB4F8"
+            android:textSize="20sp"
+            android:paddingLeft="6dp"
+            android:paddingRight="6dp" />
+    </LinearLayout>
+
+    <ListView
+        android:id="@+id/articleList"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:divider="#22FFFFFF"
+        android:dividerHeight="1dp" />
+
+    <TextView
+        android:id="@+id/articleEmpty"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:text="サイトを🏠ホームに固定して↻で取得"
+        android:textColor="#999999"
+        android:textSize="13sp" />
+</LinearLayout>
