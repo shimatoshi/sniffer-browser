@@ -144,6 +144,19 @@ public class SnifferChrome extends WebChromeClient {
         mainWeb.loadUrl(url);
     }
 
+    // ---- UA ----
+
+    /**
+     * WebView識別子(「; wv」と「Version/4.0 」)を落としたChrome相当UAを設定する。
+     * GoogleはWebView UAを見るとOAuth/GISスクリプトにHTMLエラーを返し
+     * ERR_BLOCKED_BY_ORBで「Googleでログイン」が無反応になるため必須。
+     */
+    public static void applyChromeUa(android.webkit.WebSettings s) {
+        String ua = s.getUserAgentString();
+        if (ua == null) return;
+        s.setUserAgentString(ua.replace("; wv", "").replace("Version/4.0 ", ""));
+    }
+
     // ---- 通常ダウンロード（静的ヘルパ） ----
 
     /** PDF/zip/画像長押し等の通常DLをDownloadManagerへ。Cookie/UA/Referer引き継ぎ */

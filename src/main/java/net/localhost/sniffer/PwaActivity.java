@@ -69,6 +69,7 @@ public class PwaActivity extends Activity {
         s.setSupportMultipleWindows(true); // window.open/target=_blank をonCreateWindowで受ける
         if (Build.VERSION.SDK_INT >= 21)
             s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        SnifferChrome.applyChromeUa(s);
         ua = s.getUserAgentString();
 
         CookieManager cm = CookieManager.getInstance();

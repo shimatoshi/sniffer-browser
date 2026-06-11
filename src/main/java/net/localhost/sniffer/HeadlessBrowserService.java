@@ -87,6 +87,7 @@ public class HeadlessBrowserService extends Service {
         s.setDatabaseEnabled(true);
         if (Build.VERSION.SDK_INT >= 21)
             s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        SnifferChrome.applyChromeUa(s);
 
         CookieManager cm = CookieManager.getInstance();
         cm.setAcceptCookie(true);
