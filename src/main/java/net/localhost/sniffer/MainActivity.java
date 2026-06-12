@@ -52,6 +52,9 @@ public class MainActivity extends Activity {
     private int cur = -1;
     private String ua = "";
     private AdBlocker ad;
+    private volatile boolean mediaPlaying = false;
+    private boolean inPip = false;
+    private boolean started = false;
 
     /** 1タブ = 1WebView。sniff用のページ状態もタブごとに保持 */
     private class Tab {
@@ -175,10 +178,54 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onStart() {
+        started = true;
+        super.onStart();
+        syncPlaybackService();
+    }
+
+    @Override
+    protected void onStop() {
+        started = false;
+        super.onStop();
+        syncPlaybackService();
+    }
+
+    @Override
     protected void onDestroy() {
+        Media.stopPlaybackService(this);
         for (Tab t : tabs) t.web.destroy();
         tabs.clear();
         super.onDestroy();
+    }
+
+    // ---- PiP / バックグラウンド再生 ----
+
+    @Override
+    public void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        Tab t = curTab();
+        if (t != null && t.chrome.isInFullscreen())
+            Media.enterPip(this, t.chrome.fullscreenView());
+    }
+
+    @Override
+    public void onPictureInPictureModeChanged(boolean isInPip, android.content.res.Configuration cfg) {
+        super.onPictureInPictureModeChanged(isInPip, cfg);
+        inPip = isInPip;
+        syncPlaybackService();
+    }
+
+    /** 「裏にいて・PiPでなく・再生中」のときだけ前面サービスを立てる */
+    private void syncPlaybackService() {
+        if (mediaPlaying && !started && !inPip) {
+            Tab t = curTab();
+            String title = (t != null && t.pageTitle != null && !t.pageTitle.isEmpty())
+                    ? t.pageTitle : "Sniffer";
+            Media.startPlaybackService(this, title);
+        } else {
+            Media.stopPlaybackService(this);
+        }
     }
 
     // ---- タブ管理 ----
@@ -815,6 +862,12 @@ public class MainActivity extends Activity {
         SnifferChrome.enableDownloads(this, web);
         SnifferChrome.enableImageSave(this, web);
 
+        // バックグラウンド再生: 再生状態を監視し、裏で再生中なら前面サービスで延命
+        Media.track(web, playing -> {
+            mediaPlaying = playing;
+            runOnUiThread(this::syncPlaybackService);
+        });
+
         CookieManager cm = CookieManager.getInstance();
         cm.setAcceptCookie(true);
         if (Build.VERSION.SDK_INT >= 21) cm.setAcceptThirdPartyCookies(web, true);
@@ -860,6 +913,7 @@ public class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 t.pageUrl = url;
                 t.pageTitle = view.getTitle();
+                Media.injectTracker(view);
                 db.addHistory(url, t.pageTitle);
                 OfflineStore.get(MainActivity.this).autoSave(view, db, url, t.pageTitle);
                 for (String js : UserScripts.get(MainActivity.this).forUrl(url, false))

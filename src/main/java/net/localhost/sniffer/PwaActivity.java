@@ -29,6 +29,9 @@ public class PwaActivity extends Activity {
     private volatile String pageUrl = "";
     private volatile String pageTitle = "";
     private volatile String ua = "";
+    private volatile boolean mediaPlaying = false;
+    private boolean inPip = false;
+    private boolean started = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -79,6 +82,12 @@ public class PwaActivity extends Activity {
         SnifferChrome.enableDownloads(this, web);
         SnifferChrome.enableImageSave(this, web);
 
+        // バックグラウンド再生: 再生状態を監視し、裏に回ったら前面サービスで延命する
+        Media.track(web, playing -> {
+            mediaPlaying = playing;
+            runOnUiThread(this::syncPlaybackService);
+        });
+
         web.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
@@ -89,10 +98,12 @@ public class PwaActivity extends Activity {
             }
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
-                // PWAのスコープ外（別ホスト）は既定ブラウザへ逃がす
+                // PWAスコープ外（別サイト）は既定ブラウザへ逃がす。
+                // 同一サイト(=同じ登録ドメイン)のバックエンドはスコープ内扱い→WebViewで開き、
+                // 添付ファイルはDownloadListenerが拾う。これでDLが外部ブラウザに飛ぶのを防ぐ。
                 Uri u = req.getUrl();
                 String h = u != null ? u.getHost() : null;
-                if (h != null && !h.equalsIgnoreCase(homeHost)) {
+                if (h != null && !inScope(h)) {
                     try {
                         startActivity(new Intent(Intent.ACTION_VIEW, u));
                         return true;
@@ -110,6 +121,7 @@ public class PwaActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 pageUrl = url;
                 pageTitle = view.getTitle();
+                Media.injectTracker(view);
                 for (String js : UserScripts.get(PwaActivity.this).forUrl(url, false))
                     view.evaluateJavascript(js, null);
             }
@@ -120,10 +132,10 @@ public class PwaActivity extends Activity {
                 pageTitle = title;
             }
             @Override protected void openUrl(String url) {
-                // PWAスコープ外（別ホスト）への新規窓は既定ブラウザへ
+                // PWAスコープ外（別サイト）への新規窓は既定ブラウザへ
                 String h = null;
                 try { h = Uri.parse(url).getHost(); } catch (Throwable ignore) {}
-                if (h != null && !h.equalsIgnoreCase(homeHost)) {
+                if (h != null && !inScope(h)) {
                     try {
                         startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
                         return;
@@ -138,6 +150,60 @@ public class PwaActivity extends Activity {
     private static int parseColor(String c, int fallback) {
         if (c == null || c.isEmpty()) return fallback;
         try { return Color.parseColor(c.trim()); } catch (Throwable ignore) { return fallback; }
+    }
+
+    /** 同一サイト(=同じ登録ドメイン)ならスコープ内。front/backendでホストが違っても拾う */
+    private boolean inScope(String host) {
+        return AdBlocker.site(host).equalsIgnoreCase(AdBlocker.site(homeHost));
+    }
+
+    // ---- PiP: 全画面動画中にHome/Recentsで小窓化 ----
+
+    @Override
+    public void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        if (chrome != null && chrome.isInFullscreen())
+            Media.enterPip(this, chrome.fullscreenView());
+    }
+
+    @Override
+    public void onPictureInPictureModeChanged(boolean isInPip, android.content.res.Configuration cfg) {
+        super.onPictureInPictureModeChanged(isInPip, cfg);
+        inPip = isInPip;
+        // PiP中はプロセスが生きているので前面サービスは不要。抜けたら再判定。
+        syncPlaybackService();
+    }
+
+    // ---- バックグラウンド再生: 裏に回り再生中なら前面サービスで延命 ----
+
+    @Override
+    protected void onStop() {
+        started = false;
+        super.onStop();
+        syncPlaybackService();
+    }
+
+    @Override
+    protected void onStart() {
+        started = true;
+        super.onStart();
+        syncPlaybackService();
+    }
+
+    @Override
+    protected void onDestroy() {
+        Media.stopPlaybackService(this);
+        super.onDestroy();
+    }
+
+    /** 「裏にいて・PiPでなく・再生中」のときだけ前面サービスを立てる。それ以外は畳む */
+    private void syncPlaybackService() {
+        if (mediaPlaying && !started && !inPip) {
+            String t = (pageTitle == null || pageTitle.isEmpty()) ? homeHost : pageTitle;
+            Media.startPlaybackService(this, t);
+        } else {
+            Media.stopPlaybackService(this);
+        }
     }
 
     @Override
