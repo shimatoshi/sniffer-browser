@@ -73,9 +73,6 @@ public class SnifferChrome extends WebChromeClient {
     /** 全画面動画中か（PiP判定に使う） */
     public boolean isInFullscreen() { return customView != null; }
 
-    /** 全画面動画のView（PiPの縦横比計算に使う）。全画面でなければnull */
-    public View fullscreenView() { return customView; }
-
     /** BACKキーから呼ぶ。全画面中だったらtrue（処理済み） */
     public boolean exitFullscreen() {
         if (customView == null) return false;

@@ -6,7 +6,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 import android.util.Rational;
-import android.view.View;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 
@@ -22,8 +21,12 @@ public final class Media {
 
     private Media() {}
 
-    /** 再生中/停止の通知を受け取るコールバック */
-    public interface PlayState { void onPlaying(boolean playing); }
+    /** 再生中/停止と動画サイズの通知を受け取るコールバック */
+    public interface PlayState {
+        void onPlaying(boolean playing);
+        /** 再生中動画の実寸（videoWidth/Height）。PiPの縦横比に使う */
+        void onVideoSize(int w, int h);
+    }
 
     /**
      * WebViewに再生状態ブリッジを仕込む。setupWeb時に1回だけ呼ぶ。
@@ -34,6 +37,8 @@ public final class Media {
         web.addJavascriptInterface(new Object() {
             @JavascriptInterface
             public void state(boolean playing) { cb.onPlaying(playing); }
+            @JavascriptInterface
+            public void dims(int w, int h) { cb.onVideoSize(w, h); }
         }, JS_IFACE);
     }
 
@@ -44,25 +49,32 @@ public final class Media {
 
     private static final String TRACK_JS =
             "(function(){if(window.__snifferPBset)return;window.__snifferPBset=1;" +
-            "function any(){return [].slice.call(document.querySelectorAll('video,audio'))" +
-            ".some(function(m){return !m.paused&&!m.ended&&m.readyState>2;});}" +
-            "function rep(){try{" + JS_IFACE + ".state(any());}catch(e){}}" +
-            "['play','playing','pause','ended','emptied'].forEach(function(e){" +
-            "document.addEventListener(e,rep,true);});})();";
+            "function all(){return [].slice.call(document.querySelectorAll('video,audio'));}" +
+            "function live(m){return !m.paused&&!m.ended&&m.readyState>2;}" +
+            "function rep(){try{" +
+            "var ms=all();" + JS_IFACE + ".state(ms.some(live));" +
+            "var v=ms.filter(function(m){return m.videoWidth>0;});" +
+            "var b=v.filter(live)[0]||v[0];" +
+            "if(b)" + JS_IFACE + ".dims(b.videoWidth,b.videoHeight);" +
+            "}catch(e){}}" +
+            "['play','playing','pause','ended','emptied','loadedmetadata','resize']" +
+            ".forEach(function(e){document.addEventListener(e,rep,true);});})();";
 
     // ---- ネイティブPiP ----
 
     /**
-     * 全画面動画(view)をPiP小窓へ。Homeを押した時など onUserLeaveHint から呼ぶ。
+     * 全画面動画をPiP小窓へ。Homeを押した時など onUserLeaveHint から呼ぶ。
+     * w/h はJSブリッジで取った動画の実寸（videoWidth/Height）。
+     * 全画面ビューのサイズは画面と同じで縦持ちだと縦長PiPになるため使わない。
      * @return PiPに入れたら true
      */
-    public static boolean enterPip(Activity act, View video) {
+    public static boolean enterPip(Activity act, int w, int h) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false;
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 act.enterPictureInPictureMode(
                         new PictureInPictureParams.Builder()
-                                .setAspectRatio(aspectOf(video))
+                                .setAspectRatio(aspectOf(w, h))
                                 .build());
             } else {
                 //noinspection deprecation
@@ -74,10 +86,8 @@ public final class Media {
         }
     }
 
-    /** 動画Viewの縦横比。取れなければ16:9。PiP許容域(0.42〜2.39)へクランプ */
-    private static Rational aspectOf(View v) {
-        int w = v != null ? v.getWidth() : 0;
-        int h = v != null ? v.getHeight() : 0;
+    /** 動画の縦横比。取れなければ16:9。PiP許容域(0.42〜2.39)へクランプ */
+    private static Rational aspectOf(int w, int h) {
         if (w <= 0 || h <= 0) { w = 16; h = 9; }
         double r = (double) w / h;
         if (r < 0.42) { w = 42; h = 100; }

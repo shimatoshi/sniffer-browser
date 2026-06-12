@@ -53,6 +53,7 @@ public class MainActivity extends Activity {
     private String ua = "";
     private AdBlocker ad;
     private volatile boolean mediaPlaying = false;
+    private volatile int videoW, videoH;
     private boolean inPip = false;
     private boolean started = false;
 
@@ -206,7 +207,7 @@ public class MainActivity extends Activity {
         super.onUserLeaveHint();
         Tab t = curTab();
         if (t != null && t.chrome.isInFullscreen())
-            Media.enterPip(this, t.chrome.fullscreenView());
+            Media.enterPip(this, videoW, videoH);
     }
 
     @Override
@@ -863,9 +864,14 @@ public class MainActivity extends Activity {
         SnifferChrome.enableImageSave(this, web);
 
         // バックグラウンド再生: 再生状態を監視し、裏で再生中なら前面サービスで延命
-        Media.track(web, playing -> {
-            mediaPlaying = playing;
-            runOnUiThread(this::syncPlaybackService);
+        Media.track(web, new Media.PlayState() {
+            @Override public void onPlaying(boolean playing) {
+                mediaPlaying = playing;
+                runOnUiThread(MainActivity.this::syncPlaybackService);
+            }
+            @Override public void onVideoSize(int w, int h) {
+                videoW = w; videoH = h;
+            }
         });
 
         CookieManager cm = CookieManager.getInstance();

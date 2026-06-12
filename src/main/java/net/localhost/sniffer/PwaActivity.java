@@ -30,6 +30,7 @@ public class PwaActivity extends Activity {
     private volatile String pageTitle = "";
     private volatile String ua = "";
     private volatile boolean mediaPlaying = false;
+    private volatile int videoW, videoH;
     private boolean inPip = false;
     private boolean started = false;
 
@@ -83,9 +84,14 @@ public class PwaActivity extends Activity {
         SnifferChrome.enableImageSave(this, web);
 
         // バックグラウンド再生: 再生状態を監視し、裏に回ったら前面サービスで延命する
-        Media.track(web, playing -> {
-            mediaPlaying = playing;
-            runOnUiThread(this::syncPlaybackService);
+        Media.track(web, new Media.PlayState() {
+            @Override public void onPlaying(boolean playing) {
+                mediaPlaying = playing;
+                runOnUiThread(PwaActivity.this::syncPlaybackService);
+            }
+            @Override public void onVideoSize(int w, int h) {
+                videoW = w; videoH = h;
+            }
         });
 
         web.setWebViewClient(new WebViewClient() {
@@ -163,7 +169,7 @@ public class PwaActivity extends Activity {
     public void onUserLeaveHint() {
         super.onUserLeaveHint();
         if (chrome != null && chrome.isInFullscreen())
-            Media.enterPip(this, chrome.fullscreenView());
+            Media.enterPip(this, videoW, videoH);
     }
 
     @Override
