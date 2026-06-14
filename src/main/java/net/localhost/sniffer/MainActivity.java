@@ -411,6 +411,45 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** WebView自身がロードできるスキームか。これ以外は外部アプリへ委譲する。 */
+    private static boolean isWebScheme(String s) {
+        return "http".equals(s) || "https".equals(s) || "file".equals(s)
+                || "data".equals(s) || "blob".equals(s) || "about".equals(s)
+                || "javascript".equals(s) || "ws".equals(s) || "wss".equals(s);
+    }
+
+    /**
+     * 独自スキームのURLを対応アプリ（ACTION_VIEW）へ渡す。
+     * 任天堂アカウント連携の npf<id>:// コールバックをポケポケ本体へ戻すのが主用途。
+     * intent:// は parseUri で復元し、未解決時は browser_fallback_url へ。
+     * 食えた場合は true（WebViewにロードさせない）。
+     */
+    private boolean openExternal(WebView view, String url) {
+        try {
+            Intent intent = url.startsWith("intent://")
+                    ? Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
+                    : new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url));
+            // intent://の悪用防止: 明示コンポーネント/セレクタを剥がしBROWSABLE扱いに限定
+            intent.addCategory(Intent.CATEGORY_BROWSABLE);
+            intent.setComponent(null);
+            intent.setSelector(null);
+            if (intent.resolveActivity(getPackageManager()) != null) {
+                startActivity(intent);
+                return true;
+            }
+            if (url.startsWith("intent://")) {
+                String fb = intent.getStringExtra("browser_fallback_url");
+                if (fb != null) { view.loadUrl(fb); return true; }
+            }
+            String sc = android.net.Uri.parse(url).getScheme();
+            Toast.makeText(this, "対応アプリが見つかりません: " + sc + "://",
+                    Toast.LENGTH_SHORT).show();
+        } catch (Throwable e) {
+            Toast.makeText(this, "外部リンクを開けません", Toast.LENGTH_SHORT).show();
+        }
+        return true; // WebViewに渡してもscheme resolve errorになるだけなので食う
+    }
+
     private void showPinDialog(Tab t) {
         String u0 = t.web.getUrl();
         if (u0 == null || u0.startsWith("gobie://")) {
@@ -891,6 +930,13 @@ public class MainActivity extends Activity {
                 if ("gobie".equals(req.getUrl().getScheme())) {
                     handleGobie(t, req.getUrl()); // ホーム内の固定解除/更新リンク
                     return true;
+                }
+                // http(s)等のWebスキーム以外（npf<id>://=任天堂アカウント連携の戻り,
+                // intent://, market:, mailto:, tel: 等）は外部アプリへ委譲。
+                // WebViewに渡すとERR_UNKNOWN_URL_SCHEME(=scheme resolve error)で停止する。
+                String scheme = req.getUrl().getScheme();
+                if (scheme != null && !isWebScheme(scheme)) {
+                    return openExternal(view, req.getUrl().toString());
                 }
                 // リダイレクトブロック: ユーザー操作なしの別サイトへのメインフレーム遷移を遮断
                 if (ad.redirectBlockOn() && req.isForMainFrame() && !req.hasGesture()) {
