@@ -42,7 +42,7 @@ public class MainActivity extends Activity {
     static final String ACTION_SEARCH = "net.localhost.sniffer.SEARCH";
     static final String EXTRA_QUERY = "query";
 
-    private FrameLayout webContainer;
+    private PullRefreshContainer webContainer;
     private EditText urlBar;
     private Button btnDl, btnTabs;
     private ProgressBar progress;
@@ -74,6 +74,10 @@ public class MainActivity extends Activity {
         setContentView(R.layout.activity_main);
 
         webContainer = findViewById(R.id.webContainer);
+        webContainer.setOnRefreshListener(() -> {
+            WebView w = curWeb();
+            if (w != null) w.reload();
+        });
         urlBar = findViewById(R.id.url);
         btnDl = findViewById(R.id.btnDl);
         btnTabs = findViewById(R.id.btnTabs);
@@ -380,35 +384,105 @@ public class MainActivity extends Activity {
 
     private void goHome(Tab t, boolean force) {
         List<BrowserDb.Entry> pins = db.listPins();
+        List<BrowserDb.Pwa> pwas = db.listPwas();
         boolean fetch = HomePage.needsFetch(pins, force);
-        t.web.loadDataWithBaseURL(HomePage.URL_HOME, HomePage.render(pins, fetch),
+        t.web.loadDataWithBaseURL(HomePage.URL_HOME, HomePage.render(pins, pwas, fetch),
                 "text/html", "utf-8", HomePage.URL_HOME);
         if (t == curTab()) urlBar.setText(HomePage.URL_HOME);
+        // 既存のピン留めPWAを台帳へ取り込み、増えていたらホームを描き直す
+        new Thread(() -> {
+            int before = pwas.size();
+            PwaInstaller.syncFromShortcuts(getApplicationContext());
+            List<BrowserDb.Pwa> after = db.listPwas();
+            if (after.size() != before) runOnUiThread(() -> rerenderHome());
+        }).start();
         if (!fetch) return;
         new Thread(() -> {
             HomePage.fetchAll(pins, force, ua);
-            runOnUiThread(() -> {
-                if (isFinishing() || isDestroyed()) return;
-                // ホームを開いたままのタブだけ取得結果で再描画
-                for (Tab x : tabs)
-                    if (HomePage.URL_HOME.equals(x.web.getUrl()))
-                        x.web.loadDataWithBaseURL(HomePage.URL_HOME,
-                                HomePage.render(db.listPins(), false),
-                                "text/html", "utf-8", HomePage.URL_HOME);
-            });
+            runOnUiThread(this::rerenderHome);
         }).start();
     }
 
-    /** ホーム内リンク gobie://unpin?id=N / gobie://refresh */
+    /** ホームを開いたままのタブだけ最新の固定サイト/PWAで再描画。 */
+    private void rerenderHome() {
+        if (isFinishing() || isDestroyed()) return;
+        List<BrowserDb.Entry> pins = db.listPins();
+        List<BrowserDb.Pwa> pwas = db.listPwas();
+        for (Tab x : tabs)
+            if (HomePage.URL_HOME.equals(x.web.getUrl()))
+                x.web.loadDataWithBaseURL(HomePage.URL_HOME,
+                        HomePage.render(pins, pwas, false),
+                        "text/html", "utf-8", HomePage.URL_HOME);
+    }
+
+    /** ホーム内リンク gobie://unpin?id=N / gobie://refresh / gobie://pwa-open|pwa-menu?id=N */
     private void handleGobie(Tab t, android.net.Uri u) {
-        if ("unpin".equals(u.getHost())) {
+        String host = u.getHost();
+        if ("unpin".equals(host)) {
             try { db.removePin(Long.parseLong(u.getQueryParameter("id"))); } catch (Throwable ignore) {}
             goHome(t, false);
-        } else if ("refresh".equals(u.getHost())) {
+        } else if ("refresh".equals(host)) {
             goHome(t, true);
+        } else if ("pwa-open".equals(host)) {
+            openPwa(pwaParam(u));
+        } else if ("pwa-menu".equals(host)) {
+            showPwaItemMenu(t, pwaParam(u));
         } else {
             goHome(t, false);
         }
+    }
+
+    private BrowserDb.Pwa pwaParam(android.net.Uri u) {
+        try { return db.getPwa(Long.parseLong(u.getQueryParameter("id"))); }
+        catch (Throwable e) { return null; }
+    }
+
+    /** ホームのPWAタイルをタップ → standalone窓（PwaActivity）で起動。 */
+    private void openPwa(BrowserDb.Pwa p) {
+        if (p == null) return;
+        try {
+            Intent i = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(p.url),
+                    this, PwaActivity.class);
+            i.putExtra("pwa_title", p.label());
+            if (p.theme != null) i.putExtra("pwa_theme", p.theme);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
+            startActivity(i);
+        } catch (Throwable e) {
+            Toast.makeText(this, "起動できません: " + e, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /** PWAタイル長押しメニュー: 開く / アップデート / 削除。 */
+    private void showPwaItemMenu(Tab t, BrowserDb.Pwa p) {
+        if (p == null) return;
+        final String[] items = {"開く", "🔄 アップデート（キャッシュ全消し）", "🗑 ホームから削除"};
+        new AlertDialog.Builder(this)
+                .setTitle(p.label())
+                .setItems(items, (d, w) -> {
+                    switch (w) {
+                        case 0:
+                            openPwa(p);
+                            break;
+                        case 1:
+                            new AlertDialog.Builder(this)
+                                    .setTitle("アップデート")
+                                    .setMessage(p.label() + " のキャッシュを全消しして"
+                                            + "最新バージョンを取り直す？")
+                                    .setPositiveButton("実行", (dd, ww) ->
+                                            PwaUpdater.update(this, p.url, p.label()))
+                                    .setNegativeButton("やめる", null)
+                                    .show();
+                            break;
+                        case 2:
+                            db.removePwa(p.id);
+                            Toast.makeText(this, "ホームから削除（ランチャーのアイコンは手動で）",
+                                    Toast.LENGTH_SHORT).show();
+                            goHome(t, false);
+                            break;
+                    }
+                })
+                .setNegativeButton("閉じる", null)
+                .show();
     }
 
     /** WebView自身がロードできるスキームか。これ以外は外部アプリへ委譲する。 */
@@ -978,6 +1052,7 @@ public class MainActivity extends Activity {
                 if (t != curTab()) return;
                 progress.setVisibility(p < 100 ? View.VISIBLE : View.GONE);
                 progress.setProgress(p);
+                if (p >= 100) webContainer.setRefreshing(false);
             }
             @Override public void onReceivedTitle(WebView view, String title) {
                 t.pageTitle = title;

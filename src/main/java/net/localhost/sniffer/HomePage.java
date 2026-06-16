@@ -41,7 +41,7 @@ public class HomePage {
     private static final Map<String, CacheEnt> cache = new ConcurrentHashMap<>();
 
     /** ホームHTMLを生成。fetchingは「裏で取得中」表示を出すか */
-    public static String render(List<BrowserDb.Entry> pins, boolean fetching) {
+    public static String render(List<BrowserDb.Entry> pins, List<BrowserDb.Pwa> pwas, boolean fetching) {
         StringBuilder b = new StringBuilder();
         b.append("<!DOCTYPE html><html><head><meta charset='utf-8'>")
                 .append("<meta name='viewport' content='width=device-width,initial-scale=1'>")
@@ -49,6 +49,7 @@ public class HomePage {
                 .append("body{background:#1a1a1a;color:#ddd;font-family:sans-serif;margin:0;padding:12px}")
                 .append("a{color:#8ab4f8;text-decoration:none}")
                 .append("h1{font-size:18px;margin:4px 0 12px}")
+                .append("h2{font-size:13px;color:#999;margin:4px 0 10px;font-weight:normal}")
                 .append(".st{font-size:12px;color:#888;margin-bottom:12px}")
                 .append(".card{background:#252525;border-radius:10px;padding:10px 12px;margin-bottom:12px}")
                 .append(".site{display:flex;align-items:center;justify-content:space-between}")
@@ -57,8 +58,30 @@ public class HomePage {
                 .append("ul{list-style:none;margin:8px 0 0;padding:0}")
                 .append("li{margin:7px 0;font-size:13px;line-height:1.4}")
                 .append(".empty{color:#777;font-size:13px;margin-top:6px}")
+                // PWAグリッド
+                .append(".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr));")
+                .append("gap:6px 4px;margin:0 0 18px}")
+                .append(".pwa{display:flex;flex-direction:column;align-items:center;text-align:center;")
+                .append("padding:8px 2px;border-radius:12px;-webkit-tap-highlight-color:transparent;")
+                .append("-webkit-touch-callout:none;user-select:none}")
+                .append(".pwa:active{background:#333}")
+                .append(".pwa img{width:52px;height:52px;border-radius:14px;object-fit:cover;background:#333}")
+                .append(".pwa span{margin-top:6px;font-size:11px;color:#ccc;line-height:1.2;")
+                .append("max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}")
                 .append("</style></head><body>");
         b.append("<h1>🏠 Gobie ホーム <a href='gobie://refresh' style='font-size:13px;font-weight:normal'>↻ 更新</a></h1>");
+        if (pwas != null && !pwas.isEmpty()) {
+            b.append("<h2>アプリ（長押しでメニュー）</h2><div class='grid'>");
+            for (BrowserDb.Pwa p : pwas) {
+                String src = (p.icon != null && !p.icon.isEmpty())
+                        ? "data:image/png;base64," + p.icon : "";
+                b.append("<a class='pwa' data-id='").append(p.id)
+                        .append("' href='gobie://pwa-open?id=").append(p.id).append("'>")
+                        .append("<img src='").append(src).append("' alt=''>")
+                        .append("<span>").append(esc(p.label())).append("</span></a>");
+            }
+            b.append("</div>");
+        }
         if (fetching) b.append("<div class='st'>新着記事を取得中...</div>");
         if (pins.isEmpty()) {
             b.append("<div class='card'>固定サイトがまだ無い。<br>")
@@ -83,6 +106,18 @@ public class HomePage {
             }
             b.append("</div>");
         }
+        // PWAタイルの長押し→メニュー（gobie://pwa-menu）。直後のclickは抑止。
+        // 長押しはWebViewがcontextmenuイベントを投げるのでそれを拾う（手製タイマーより堅牢）。
+        // contextmenu→メニュー、直後のclickは抑止。短タップのclickは通常通りPWA起動。
+        b.append("<script>(function(){")
+                .append("var longp=false;")
+                .append("document.querySelectorAll('.pwa').forEach(function(a){")
+                .append("a.addEventListener('contextmenu',function(e){e.preventDefault();longp=true;")
+                .append("if(navigator.vibrate)navigator.vibrate(20);")
+                .append("location.href='gobie://pwa-menu?id='+a.getAttribute('data-id');")
+                .append("setTimeout(function(){longp=false;},800);});")
+                .append("a.addEventListener('click',function(e){if(longp){e.preventDefault();longp=false;}});")
+                .append("});})();</script>");
         b.append("</body></html>");
         return b.toString();
     }

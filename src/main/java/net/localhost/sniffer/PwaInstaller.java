@@ -72,7 +72,43 @@ public class PwaInstaller {
         }
         final String fName = name, fStart = start, fTheme = theme;
         final Bitmap fIcon = icon != null ? fitIcon(icon) : letterIcon(name);
+        // ブラウザホームに並べるため台帳へ保存（start_url一意・アイコン込み）
+        try {
+            new BrowserDb(act.getApplicationContext())
+                    .upsertPwa(fStart, fName, fTheme, pngBase64(fIcon));
+        } catch (Throwable ignore) {}
         act.runOnUiThread(() -> pin(act, fStart, fName, fTheme, fIcon));
+    }
+
+    /**
+     * ランチャーにピン留め済みの自アプリPWAショートカットを台帳へ取り込む（既存PWA救済）。
+     * すでに台帳にあるURLは触らない。アイコンは取り出せないので頭文字アイコンで埋める。
+     * ワーカースレッドから呼ぶこと。
+     */
+    static void syncFromShortcuts(android.content.Context ctx) {
+        if (Build.VERSION.SDK_INT < 25) return;
+        try {
+            ShortcutManager sm = ctx.getSystemService(ShortcutManager.class);
+            if (sm == null) return;
+            BrowserDb db = new BrowserDb(ctx.getApplicationContext());
+            for (ShortcutInfo si : sm.getPinnedShortcuts()) {
+                Intent it = si.getIntent();
+                if (it == null || it.getComponent() == null || it.getData() == null) continue;
+                if (!PwaActivity.class.getName().equals(it.getComponent().getClassName())) continue;
+                String url = it.getData().toString();
+                CharSequence lbl = si.getShortLabel();
+                String name = lbl != null ? lbl.toString() : "";
+                String theme = it.getStringExtra("pwa_theme");
+                db.insertPwaIfAbsent(url, name, theme, pngBase64(letterIcon(name)));
+            }
+        } catch (Throwable ignore) {}
+    }
+
+    /** Bitmap → PNGのbase64文字列（data URIの本体）。 */
+    static String pngBase64(Bitmap b) {
+        ByteArrayOutputStream bo = new ByteArrayOutputStream();
+        b.compress(Bitmap.CompressFormat.PNG, 100, bo);
+        return android.util.Base64.encodeToString(bo.toByteArray(), android.util.Base64.NO_WRAP);
     }
 
     private static void pin(Activity act, String start, String name, String theme, Bitmap icon) {
