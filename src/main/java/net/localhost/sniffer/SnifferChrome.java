@@ -200,6 +200,9 @@ public class SnifferChrome extends WebChromeClient {
     /** 画像長押し → 保存/URLコピーのメニュー。IMAGE_TYPEとリンク付き画像の両方を拾う */
     public static void enableImageSave(Activity act, WebView web) {
         web.setOnLongClickListener(v -> {
+            // ホーム(gobie://)では横取りせずページのcontextmenu(PWA長押しメニュー)に渡す
+            String cur = ((WebView) v).getUrl();
+            if (cur != null && cur.startsWith("gobie://")) return false;
             WebView.HitTestResult hit = ((WebView) v).getHitTestResult();
             int type = hit.getType();
             if (type != WebView.HitTestResult.IMAGE_TYPE
