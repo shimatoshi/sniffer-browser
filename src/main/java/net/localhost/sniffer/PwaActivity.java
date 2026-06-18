@@ -120,6 +120,7 @@ public class PwaActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap f) {
                 pageUrl = url;
+                SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
                 for (String js : UserScripts.get(PwaActivity.this).forUrl(url, true))
                     view.evaluateJavascript(js, null);
             }

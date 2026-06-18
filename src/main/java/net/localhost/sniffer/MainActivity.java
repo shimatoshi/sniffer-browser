@@ -1039,6 +1039,7 @@ public class MainActivity extends Activity {
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap f) {
                 t.pageUrl = url;
                 if (t == curTab()) runOnUiThread(() -> urlBar.setText(url));
+                SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
                 for (String js : UserScripts.get(MainActivity.this).forUrl(url, true))
                     view.evaluateJavascript(js, null);
             }

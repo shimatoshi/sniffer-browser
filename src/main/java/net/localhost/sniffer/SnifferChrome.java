@@ -184,6 +184,24 @@ public class SnifferChrome extends WebChromeClient {
                 downloadUrl(act, web, url, contentDisposition, mimetype));
     }
 
+    /**
+     * blob: ダウンロード救済ガード。各ページ読み込み時に注入する。
+     * 多くのサイト(例: createObjectURL→a.click()→revokeObjectURL)はclick直後に
+     * 同期でrevokeObjectURLを呼ぶため、DownloadListener経由で後追いするfetchBlobが
+     * fetch('blob:')する頃にはblobが破棄され "TypeError: Failed to fetch" になる。
+     * revokeを60秒遅延させてblobを生かし、fetchBlobが間に合うようにする。
+     */
+    static final String BLOB_GUARD_JS =
+            "(function(){if(window.__gobieBlobGuard)return;window.__gobieBlobGuard=1;"
+            + "var R=URL.revokeObjectURL.bind(URL);"
+            + "URL.revokeObjectURL=function(u){setTimeout(function(){try{R(u);}catch(e){}},60000);};"
+            + "})();";
+
+    /** onPageStartedから呼ぶ。blob revokeを遅延させてDL救済する。 */
+    public static void injectBlobGuard(WebView web) {
+        web.evaluateJavascript(BLOB_GUARD_JS, null);
+    }
+
     /** http(s)/data: URLをDownloadフォルダへ保存。enableDownloadsと画像長押しの共通経路 */
     static void downloadUrl(Activity act, WebView web, String url,
                             String contentDisposition, String mimetype) {
