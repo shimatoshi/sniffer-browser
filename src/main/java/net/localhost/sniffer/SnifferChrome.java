@@ -11,6 +11,7 @@ import android.os.Message;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.URLUtil;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -162,8 +163,23 @@ public class SnifferChrome extends WebChromeClient {
 
     // ---- 通常ダウンロード（静的ヘルパ） ----
 
+    static final String BLOB_IFACE = "__snifferBlob";
+
     /** PDF/zip/画像長押し等の通常DLをDownloadManagerへ。Cookie/UA/Referer引き継ぎ */
+    @SuppressWarnings("AddJavascriptInterface")
     public static void enableDownloads(Activity act, WebView web) {
+        // blob: をJSでfetch→base64化してJava側に戻すためのブリッジ
+        web.addJavascriptInterface(new Object() {
+            @JavascriptInterface
+            public void save(String dataUrl, String mime) {
+                act.runOnUiThread(() -> saveDataUrl(act, dataUrl));
+            }
+            @JavascriptInterface
+            public void fail(String msg) {
+                act.runOnUiThread(() ->
+                        Toast.makeText(act, "blob DL失敗: " + msg, Toast.LENGTH_SHORT).show());
+            }
+        }, BLOB_IFACE);
         web.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) ->
                 downloadUrl(act, web, url, contentDisposition, mimetype));
     }
@@ -172,10 +188,7 @@ public class SnifferChrome extends WebChromeClient {
     static void downloadUrl(Activity act, WebView web, String url,
                             String contentDisposition, String mimetype) {
         if (url.startsWith("data:")) { saveDataUrl(act, url); return; }
-        if (url.startsWith("blob:")) {
-            Toast.makeText(act, "blob URLのDLは未対応", Toast.LENGTH_SHORT).show();
-            return;
-        }
+        if (url.startsWith("blob:")) { fetchBlob(act, web, url); return; }
         try {
             DownloadManager.Request r = new DownloadManager.Request(Uri.parse(url));
             r.setMimeType(mimetype);
@@ -241,6 +254,43 @@ public class SnifferChrome extends WebChromeClient {
         return "image/jpeg";
     }
 
+    /**
+     * blob: をWebView内のJSでfetchし、FileReaderでdata:URL化してJava側(BLOB_IFACE)へ戻す。
+     * blobの実体はWebViewメモリにしか無くDownloadManager非対応なので、この経路でしか落とせない。
+     */
+    private static void fetchBlob(Activity act, WebView web, String url) {
+        Toast.makeText(act, "blob取得中…", Toast.LENGTH_SHORT).show();
+        String safe = url.replace("\\", "\\\\").replace("'", "\\'");
+        String js = "(function(){"
+                + "fetch('" + safe + "').then(function(r){return r.blob();})"
+                + ".then(function(b){var fr=new FileReader();"
+                + "fr.onload=function(){" + BLOB_IFACE + ".save(fr.result, b.type||'');};"
+                + "fr.onerror=function(){" + BLOB_IFACE + ".fail('read');};"
+                + "fr.readAsDataURL(b);})"
+                + ".catch(function(e){" + BLOB_IFACE + ".fail(''+e);});"
+                + "})();";
+        web.evaluateJavascript(js, null);
+    }
+
+    /** MIMEから拡張子を推定。MimeTypeMap優先、ダメなら画像/動画/PDFを手当て、最後はbin */
+    private static String extForMime(String mime) {
+        if (mime == null || mime.isEmpty()) return "jpg";
+        String e = android.webkit.MimeTypeMap.getSingleton()
+                .getExtensionFromMimeType(mime);
+        if (e != null) return e;
+        if (mime.contains("png")) return "png";
+        if (mime.contains("gif")) return "gif";
+        if (mime.contains("webp")) return "webp";
+        if (mime.contains("svg")) return "svg";
+        if (mime.startsWith("image/")) return "jpg";
+        if (mime.contains("mp4")) return "mp4";
+        if (mime.startsWith("video/")) return "mp4";
+        if (mime.contains("mpeg") || mime.contains("mp3")) return "mp3";
+        if (mime.startsWith("audio/")) return "m4a";
+        if (mime.contains("pdf")) return "pdf";
+        return "bin";
+    }
+
     /** data:image/...;base64,xxx をデコードしてDownloadへ直書き（targetSdk28なので直書き可） */
     private static void saveDataUrl(Activity act, String url) {
         try {
@@ -251,11 +301,12 @@ public class SnifferChrome extends WebChromeClient {
                     ? android.util.Base64.decode(url.substring(comma + 1), android.util.Base64.DEFAULT)
                     : java.net.URLDecoder.decode(url.substring(comma + 1), "UTF-8").getBytes("UTF-8");
             String mime = meta.contains(";") ? meta.substring(0, meta.indexOf(';')) : meta;
-            String ext = mime.contains("png") ? "png" : mime.contains("gif") ? "gif"
-                    : mime.contains("webp") ? "webp" : mime.contains("svg") ? "svg" : "jpg";
+            String ext = extForMime(mime);
+            boolean img = mime.startsWith("image/") || mime.isEmpty();
             java.io.File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
             dir.mkdirs();
-            java.io.File out = new java.io.File(dir, "img_" + System.currentTimeMillis() + "." + ext);
+            java.io.File out = new java.io.File(dir,
+                    (img ? "img_" : "dl_") + System.currentTimeMillis() + "." + ext);
             try (java.io.FileOutputStream fos = new java.io.FileOutputStream(out)) {
                 fos.write(bytes);
             }

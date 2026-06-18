@@ -498,7 +498,7 @@ public class MainActivity extends Activity {
      * intent:// は parseUri で復元し、未解決時は browser_fallback_url へ。
      * 食えた場合は true（WebViewにロードさせない）。
      */
-    private boolean openExternal(WebView view, String url) {
+    private boolean openExternal(WebView view, String url, boolean userGesture) {
         try {
             Intent intent = url.startsWith("intent://")
                     ? Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
@@ -507,7 +507,14 @@ public class MainActivity extends Activity {
             intent.addCategory(Intent.CATEGORY_BROWSABLE);
             intent.setComponent(null);
             intent.setSelector(null);
-            if (intent.resolveActivity(getPackageManager()) != null) {
+            android.content.ComponentName target = intent.resolveActivity(getPackageManager());
+            if (target != null) {
+                // ユーザー操作なしのPlayストア誘導(広告のmarket://, intent://...package=)は黙殺。
+                // npf://等のアプリ連携コールバックは操作有無に関わらず通す。
+                String sc = android.net.Uri.parse(url).getScheme();
+                boolean toStore = "market".equals(sc)
+                        || "com.android.vending".equals(target.getPackageName());
+                if (!userGesture && toStore) return true;
                 startActivity(intent);
                 return true;
             }
@@ -1010,7 +1017,7 @@ public class MainActivity extends Activity {
                 // WebViewに渡すとERR_UNKNOWN_URL_SCHEME(=scheme resolve error)で停止する。
                 String scheme = req.getUrl().getScheme();
                 if (scheme != null && !isWebScheme(scheme)) {
-                    return openExternal(view, req.getUrl().toString());
+                    return openExternal(view, req.getUrl().toString(), req.hasGesture());
                 }
                 // リダイレクトブロック: ユーザー操作なしの別サイトへのメインフレーム遷移を遮断
                 if (ad.redirectBlockOn() && req.isForMainFrame() && !req.hasGesture()) {
