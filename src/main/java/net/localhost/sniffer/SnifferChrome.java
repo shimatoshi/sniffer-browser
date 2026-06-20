@@ -207,16 +207,35 @@ public class SnifferChrome extends WebChromeClient {
                             String contentDisposition, String mimetype) {
         if (url.startsWith("data:")) { saveDataUrl(act, url); return; }
         if (url.startsWith("blob:")) { fetchBlob(act, web, url); return; }
+        // 診断ログ: DownloadListenerが実際に拾ったURL/ヘッダ
+        android.util.Log.i("SnifferDL", "downloadUrl url=" + url
+                + " cd=" + contentDisposition + " mime=" + mimetype);
+        // 再生ストリームの誤発火ガード:
+        // 動画の<video>再生(progressive)が失敗するとWebViewがそのsrcをDownloadListenerに流し、
+        // 同じ動画が無限にダウンロードされる。実DLボタンは必ず ?dl=1 を付けるので、
+        // /stream/ を含むのに dl=1 が無いURLは「再生用」と判断して保存しない。
+        if (url.contains("/stream/") && !url.contains("dl=1")) {
+            android.util.Log.w("SnifferDL", "skip playback stream (no dl=1): " + url);
+            return;
+        }
         try {
+            // /stream のDLでサーバが application/octet-stream を返すと、Content-Disposition の
+            // filename が *.mp4 でも guessFileName が mime を優先して拡張子を .bin にしてしまう。
+            // format=audio なら m4a(audio/mp4)、それ以外は mp4(video/mp4) に補正する。
+            String effMime = mimetype;
+            if (url.contains("/stream/") && (effMime == null || effMime.isEmpty()
+                    || effMime.equals("application/octet-stream"))) {
+                effMime = url.contains("format=audio") ? "audio/mp4" : "video/mp4";
+            }
             DownloadManager.Request r = new DownloadManager.Request(Uri.parse(url));
-            r.setMimeType(mimetype);
+            r.setMimeType(effMime);
             String cookie = CookieManager.getInstance().getCookie(url);
             if (cookie != null) r.addRequestHeader("Cookie", cookie);
             String ua = web.getSettings().getUserAgentString();
             if (ua != null) r.addRequestHeader("User-Agent", ua);
             String ref = web.getUrl();
             if (ref != null) r.addRequestHeader("Referer", ref);
-            String fn = URLUtil.guessFileName(url, contentDisposition, mimetype);
+            String fn = URLUtil.guessFileName(url, contentDisposition, effMime);
             r.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fn);
             r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
             ((DownloadManager) act.getSystemService(Context.DOWNLOAD_SERVICE)).enqueue(r);
