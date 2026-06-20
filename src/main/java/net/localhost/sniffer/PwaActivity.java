@@ -104,17 +104,16 @@ public class PwaActivity extends Activity {
             }
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
-                // PWAスコープ外（別サイト）は既定ブラウザへ逃がす。
-                // 同一サイト(=同じ登録ドメイン)のバックエンドはスコープ内扱い→WebViewで開き、
-                // 添付ファイルはDownloadListenerが拾う。これでDLが外部ブラウザに飛ぶのを防ぐ。
                 Uri u = req.getUrl();
-                String h = u != null ? u.getHost() : null;
-                if (h != null && !inScope(h)) {
-                    try {
-                        startActivity(new Intent(Intent.ACTION_VIEW, u));
-                        return true;
-                    } catch (Throwable ignore) {}
+                // 非Webスキーム(独自スキーム/intent:/mailto:/tel:等)だけ外部アプリへ委譲。
+                // ログイン連携の戻りcallback等はこれで外部に渡る。
+                if (!isWeb(u)) {
+                    try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (Throwable ignore) {}
+                    return true; // 未対応スキームでWebViewをERR_UNKNOWN_URL_SCHEMEにしない
                 }
+                // http(s)はスコープ内外を問わずPWA内WebViewで開く。スコープ外を外部ブラウザへ
+                // 蹴り出すと別タスクで真っ白になりPWAに戻れない(別オリジンのbackend/動画CDNで頻発)。
+                // 添付ファイルDLはDownloadListenerが拾い、遷移はキャンセルされPWAが保持される。
                 return false;
             }
             @Override
@@ -139,14 +138,12 @@ public class PwaActivity extends Activity {
                 pageTitle = title;
             }
             @Override protected void openUrl(String url) {
-                // PWAスコープ外（別サイト）への新規窓は既定ブラウザへ
-                String h = null;
-                try { h = Uri.parse(url).getHost(); } catch (Throwable ignore) {}
-                if (h != null && !inScope(h)) {
-                    try {
-                        startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
-                        return;
-                    } catch (Throwable ignore) {}
+                // window.open/target=_blank。非Webスキームのみ外部アプリへ、http(s)はPWA内で開く
+                Uri u = null;
+                try { u = Uri.parse(url); } catch (Throwable ignore) {}
+                if (u != null && !isWeb(u)) {
+                    try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (Throwable ignore) {}
+                    return;
                 }
                 super.openUrl(url);
             }
@@ -159,9 +156,11 @@ public class PwaActivity extends Activity {
         try { return Color.parseColor(c.trim()); } catch (Throwable ignore) { return fallback; }
     }
 
-    /** 同一サイト(=同じ登録ドメイン)ならスコープ内。front/backendでホストが違っても拾う */
-    private boolean inScope(String host) {
-        return AdBlocker.site(host).equalsIgnoreCase(AdBlocker.site(homeHost));
+    /** http/https か（それ以外=独自スキーム等は外部アプリへ委譲する） */
+    private static boolean isWeb(Uri u) {
+        if (u == null) return false;
+        String s = u.getScheme();
+        return "http".equalsIgnoreCase(s) || "https".equalsIgnoreCase(s);
     }
 
     // ---- PiP: 全画面動画中にHome/Recentsで小窓化 ----
