@@ -13,7 +13,9 @@ import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
+import android.net.http.SslError;
 import android.webkit.CookieManager;
+import android.webkit.SslErrorHandler;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
@@ -63,6 +65,8 @@ public class MainActivity extends Activity {
         SnifferChrome chrome;
         volatile String pageUrl = "";
         volatile String pageTitle = "";
+        // WiFiログイン(キャプティブポータル)呼び出し中。リダイレクトブロックを一時的に素通しさせる。
+        volatile boolean captiveProbe = false;
     }
 
     private Tab curTab() { return (cur >= 0 && cur < tabs.size()) ? tabs.get(cur) : null; }
@@ -348,6 +352,7 @@ public class MainActivity extends Activity {
         m.add(0, 3, 0, bm ? "★ ブックマーク解除" : "☆ ブックマークに追加");
         m.add(0, 4, 0, "📑 ブックマーク");
         m.add(0, 5, 0, "🕘 履歴");
+        m.add(0, 11, 0, "📶 WiFiログイン");
         m.add(0, 9, 0, "🏠 ホームに固定");
         m.add(0, 6, 0, "📌 PWAとしてホームに追加");
         m.add(0, 10, 0, "📦 オフライン");
@@ -374,10 +379,26 @@ public class MainActivity extends Activity {
                 case 8: showScripts(); return true;
                 case 9: showPinDialog(t); return true;
                 case 10: showOffline(); return true;
+                case 11: openCaptivePortal(t); return true;
             }
             return false;
         });
         pm.show();
+    }
+
+    /** WiFiログイン画面（キャプティブポータル）を強制的に呼び出す。
+     *  ポータルは平文HTTPリクエストにしか割り込めない。HTTPSや古いキャッシュを開くと
+     *  割り込めず「Wi-Fi接続が利用しづらい状態です/busy」等の古い画面が出やすい。
+     *  既知のHTTP probeをキャッシュ無しで叩き、最新のログインページへ302で飛ばさせる。 */
+    private void openCaptivePortal(Tab t) {
+        if (t == null) return;
+        t.web.clearCache(true);      // busy画面など古いポータル応答を捨てて取り直す
+        t.captiveProbe = true;        // 続くポータルへの無操作リダイレクトを素通しさせる
+        // 平文HTTPの軽量probe。ポータル配下では302でログイン画面へリダイレクトされる。
+        String probe = "http://captive.apple.com/hotspot-detect.html";
+        t.web.loadUrl(probe);
+        if (t == curTab()) urlBar.setText(probe);
+        Toast.makeText(this, "WiFiログイン画面を呼び出し中…", Toast.LENGTH_SHORT).show();
     }
 
     // ---- ホーム（gobie://home、固定サイト＋新着オートスクレイプ） ----
@@ -998,6 +1019,9 @@ public class MainActivity extends Activity {
         cm.setAcceptCookie(true);
         if (Build.VERSION.SDK_INT >= 21) cm.setAcceptThirdPartyCookies(web, true);
 
+        // 証明書エラーで「続行」したホスト（タブ単位）と確認ダイアログ多重表示ガード
+        final java.util.Set<String> sslOk = new java.util.HashSet<>();
+        final boolean[] sslPrompting = {false};
         web.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
@@ -1019,8 +1043,12 @@ public class MainActivity extends Activity {
                 if (scheme != null && !isWebScheme(scheme)) {
                     return openExternal(view, req.getUrl().toString(), req.hasGesture());
                 }
-                // リダイレクトブロック: ユーザー操作なしの別サイトへのメインフレーム遷移を遮断
-                if (ad.redirectBlockOn() && req.isForMainFrame() && !req.hasGesture()) {
+                // ユーザーがリンク/フォームを操作したらキャプティブ素通しモードを解除
+                if (req.hasGesture()) t.captiveProbe = false;
+                // リダイレクトブロック: ユーザー操作なしの別サイトへのメインフレーム遷移を遮断。
+                // ただしWiFiログイン呼び出し中は、ポータルへの無操作リダイレクトを通す。
+                if (ad.redirectBlockOn() && req.isForMainFrame()
+                        && !req.hasGesture() && !t.captiveProbe) {
                     String curUrl = view.getUrl();
                     String from = curUrl != null
                             ? AdBlocker.site(android.net.Uri.parse(curUrl).getHost()) : "";
@@ -1052,6 +1080,32 @@ public class MainActivity extends Activity {
                 OfflineStore.get(MainActivity.this).autoSave(view, db, url, t.pageTitle);
                 for (String js : UserScripts.get(MainActivity.this).forUrl(url, false))
                     view.evaluateJavascript(js, null);
+            }
+            // 証明書エラーの取り扱い。デフォルト挙動は無言cancel=真っ白なので、
+            // WiFiキャプティブポータル（証明書を横取り/自己署名する事が多い）等で
+            // ページが開けない。許可済みホストは素通し、未判断なら一度だけ確認する。
+            @Override
+            public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
+                String host = android.net.Uri.parse(error.getUrl()).getHost();
+                if (host != null && sslOk.contains(host)) { handler.proceed(); return; }
+                // WiFiログイン呼び出し中は、ポータルの自己署名証明書を確認なしで通す
+                if (t.captiveProbe) { if (host != null) sslOk.add(host); handler.proceed(); return; }
+                handler.cancel(); // 承認するまでは止める
+                if (sslPrompting[0]) return; // ダイアログ多重表示を防ぐ
+                sslPrompting[0] = true;
+                runOnUiThread(() -> new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("証明書エラー")
+                        .setMessage((host != null ? host : error.getUrl())
+                                + "\nの接続は安全でない可能性があります"
+                                + "（WiFiログイン画面ではよくあります）。続行しますか？")
+                        .setPositiveButton("続行", (d, w) -> {
+                            sslPrompting[0] = false;
+                            if (host != null) sslOk.add(host);
+                            view.reload();
+                        })
+                        .setNegativeButton("キャンセル", (d, w) -> sslPrompting[0] = false)
+                        .setOnCancelListener(d -> sslPrompting[0] = false)
+                        .show());
             }
         });
 
