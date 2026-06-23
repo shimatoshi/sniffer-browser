@@ -543,11 +543,17 @@ public class MainActivity extends Activity {
                 String fb = intent.getStringExtra("browser_fallback_url");
                 if (fb != null) { view.loadUrl(fb); return true; }
             }
-            String sc = android.net.Uri.parse(url).getScheme();
-            Toast.makeText(this, "対応アプリが見つかりません: " + sc + "://",
-                    Toast.LENGTH_SHORT).show();
+            // 未解決時: ユーザーが実際にタップした時だけ通知する。
+            // ページ読み込み時に自動発火する deep link (instagram:// 等で本体未導入) は
+            // 無操作リダイレクトなので黙殺し、トースト連発を防ぐ。
+            if (userGesture) {
+                String sc = android.net.Uri.parse(url).getScheme();
+                Toast.makeText(this, "対応アプリが見つかりません: " + sc + "://",
+                        Toast.LENGTH_SHORT).show();
+            }
         } catch (Throwable e) {
-            Toast.makeText(this, "外部リンクを開けません", Toast.LENGTH_SHORT).show();
+            if (userGesture)
+                Toast.makeText(this, "外部リンクを開けません", Toast.LENGTH_SHORT).show();
         }
         return true; // WebViewに渡してもscheme resolve errorになるだけなので食う
     }
@@ -587,12 +593,30 @@ public class MainActivity extends Activity {
     // ---- 設定（カテゴリ別） ----
 
     private void showSettings() {
-        final String[] cats = {"🛡 アドブロック", "📦 オフライン"};
+        final String[] cats = {"🔍 検索エンジン", "🛡 アドブロック", "📦 オフライン"};
         new AlertDialog.Builder(this)
                 .setTitle("⚙ 設定")
                 .setItems(cats, (d, w) -> {
-                    if (w == 0) showAdblockSettings();
+                    if (w == 0) showSearchEngineSettings();
+                    else if (w == 1) showAdblockSettings();
                     else showOfflineSettings();
+                })
+                .setNegativeButton("閉じる", null)
+                .show();
+    }
+
+    // ---- 設定: 検索エンジン（デフォルトはGoogle、切替でDuckDuckGo/Bing） ----
+
+    private void showSearchEngineSettings() {
+        final String[] names = new String[ENGINES.length];
+        for (int i = 0; i < ENGINES.length; i++) names[i] = ENGINES[i][0];
+        new AlertDialog.Builder(this)
+                .setTitle("検索エンジン")
+                .setSingleChoiceItems(names, searchEngineIndex(), (d, w) -> {
+                    getSharedPreferences("settings", MODE_PRIVATE)
+                            .edit().putInt("searchEngine", w).apply();
+                    Toast.makeText(this, "検索: " + names[w], Toast.LENGTH_SHORT).show();
+                    d.dismiss();
                 })
                 .setNegativeButton("閉じる", null)
                 .show();
@@ -998,6 +1022,12 @@ public class MainActivity extends Activity {
         s.setSupportMultipleWindows(true); // window.open/target=_blank をonCreateWindowで受ける
         if (Build.VERSION.SDK_INT >= 21)
             s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        // 表示域の少し外まで先行ラスタライズ → スクロール時の白抜け/カクつきを軽減
+        // (setOffscreenPreRaster はビルドSDKに無いのでリフレクション経由で呼ぶ)
+        if (Build.VERSION.SDK_INT >= 23) {
+            try { WebView.class.getMethod("setOffscreenPreRaster", boolean.class).invoke(web, true); }
+            catch (Throwable ignore) {}
+        }
         SnifferChrome.applyChromeUa(s);
         ua = s.getUserAgentString();
 
@@ -1205,13 +1235,26 @@ public class MainActivity extends Activity {
                 Toast.LENGTH_SHORT).show();
     }
 
+    // 検索エンジン: {表示名, 検索URLテンプレート}。デフォルト(index 0)はGoogle。
+    static final String[][] ENGINES = {
+            {"Google", "https://www.google.com/search?q="},
+            {"DuckDuckGo Lite", "https://lite.duckduckgo.com/lite/?q="},
+            {"Bing", "https://www.bing.com/search?q="},
+    };
+
+    private int searchEngineIndex() {
+        int i = getSharedPreferences("settings", MODE_PRIVATE).getInt("searchEngine", 0);
+        return (i >= 0 && i < ENGINES.length) ? i : 0;
+    }
+
     private void go(String q) {
         String url;
         if (q.matches("(?i)^https?://.*")) url = q;
         else if (q.contains(".") && !q.contains(" ")) url = "https://" + q;
         else {
-            try { url = "https://www.google.com/search?q=" + java.net.URLEncoder.encode(q, "UTF-8"); }
-            catch (Exception e) { url = "https://www.google.com"; }
+            String base = ENGINES[searchEngineIndex()][1];
+            try { url = base + java.net.URLEncoder.encode(q, "UTF-8"); }
+            catch (Exception e) { url = base; }
         }
         openInCurrent(url);
     }

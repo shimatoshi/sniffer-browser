@@ -68,7 +68,10 @@ public class AdBlocker {
     private AdBlocker(Context app) {
         this.app = app;
         this.sp = app.getSharedPreferences("settings", Context.MODE_PRIVATE);
-        reload();
+        // 3000行規模のblocklist解析＋DB openは重く、onCreate上で同期実行すると起動が固まる。
+        // domains/customsはvolatileで空初期化済みなので、初回ロードは別スレッドへ逃がす
+        // （ロード完了までの一瞬だけシードが未適用になるが、起動直後のホームはローカルdata）。
+        new Thread(this::reload).start();
     }
 
     // ---- 設定トグル ----
