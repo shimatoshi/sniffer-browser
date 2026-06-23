@@ -65,6 +65,8 @@ public class MainActivity extends Activity {
         SnifferChrome chrome;
         volatile String pageUrl = "";
         volatile String pageTitle = "";
+        // 復元直後のバックグラウンドタブの未読込URL。スイッチ時に初めてloadUrlする（起動高速化）。
+        volatile String pendingUrl = null;
         // WiFiログイン(キャプティブポータル)呼び出し中。リダイレクトブロックを一時的に素通しさせる。
         volatile boolean captiveProbe = false;
     }
@@ -178,6 +180,7 @@ public class MainActivity extends Activity {
         JSONArray arr = new JSONArray();
         for (Tab t : tabs) {
             String u = t.web.getUrl();
+            if (u == null) u = t.pendingUrl; // まだ開いてない復元タブはpendingUrlを引き継ぐ
             if (u != null && !u.equals("about:blank")) arr.put(u);
         }
         getPreferences(MODE_PRIVATE).edit()
@@ -248,7 +251,8 @@ public class MainActivity extends Activity {
         tabs.add(t);
         if (url != null) {
             if (url.startsWith("gobie://")) goHome(t, false); // セッション復元含む
-            else t.web.loadUrl(url);
+            else if (switchTo) t.web.loadUrl(url);
+            else t.pendingUrl = url; // バックグラウンド復元タブはスイッチ時まで読込を遅延
         }
         if (switchTo) switchTab(tabs.size() - 1);
         else updateTabBtn();
@@ -262,7 +266,13 @@ public class MainActivity extends Activity {
         cur = i;
         Tab t = tabs.get(i);
         t.web.setVisibility(View.VISIBLE);
+        if (t.pendingUrl != null) {           // 遅延復元タブを初回表示時にロード
+            String p = t.pendingUrl;
+            t.pendingUrl = null;
+            t.web.loadUrl(p);
+        }
         String u = t.web.getUrl();
+        if (u == null) u = t.pendingUrl;
         urlBar.setText(u != null ? u : "");
         progress.setVisibility(View.GONE);
         updateTabBtn();
@@ -306,11 +316,13 @@ public class MainActivity extends Activity {
                 col.setOrientation(LinearLayout.VERTICAL);
                 TextView title = new TextView(MainActivity.this);
                 String tt = t.web.getTitle();
+                if ((tt == null || tt.isEmpty()) && t.pendingUrl != null) tt = t.pendingUrl;
                 title.setText((p == cur ? "▶ " : "") + (tt == null || tt.isEmpty() ? "(無題)" : tt));
                 title.setSingleLine(true);
                 title.setTextSize(15);
                 TextView url = new TextView(MainActivity.this);
                 String uu = t.web.getUrl();
+                if (uu == null) uu = t.pendingUrl;
                 url.setText(uu == null ? "" : uu);
                 url.setSingleLine(true);
                 url.setTextSize(11);
