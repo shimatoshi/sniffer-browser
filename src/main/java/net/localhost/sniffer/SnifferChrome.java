@@ -5,9 +5,12 @@ import android.app.DownloadManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Environment;
 import android.os.Message;
+import android.webkit.GeolocationPermissions;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
@@ -31,6 +34,7 @@ import android.widget.Toast;
 public class SnifferChrome extends WebChromeClient {
 
     public static final int REQ_FILE = 71;
+    public static final int REQ_GEO  = 72;
 
     private final Activity act;
     private final WebView mainWeb;
@@ -39,6 +43,10 @@ public class SnifferChrome extends WebChromeClient {
     private CustomViewCallback customCb;
     private int savedUiVisibility;
     private ValueCallback<Uri[]> fileCb;
+
+    // geolocation: OS権限が無い時のランタイム要求の結果待ち
+    private String pendingGeoOrigin;
+    private GeolocationPermissions.Callback pendingGeoCb;
 
     public SnifferChrome(Activity act, WebView mainWeb) {
         this.act = act;
@@ -111,6 +119,61 @@ public class SnifferChrome extends WebChromeClient {
         fileCb = null;
     }
 
+    // ---- 位置情報（geolocation）----
+
+    /**
+     * Webページが現在地を要求した時に呼ばれる。WebViewは既定で拒否するため未実装だと
+     * navigator.geolocation がタイムアウト/PERMISSION_DENIEDになる。
+     * アプリがOS権限を持つなら許可、無ければランタイム要求してから応答する。
+     */
+    @Override
+    public void onGeolocationPermissionsShowPrompt(String origin,
+                                                   GeolocationPermissions.Callback callback) {
+        if (hasLocationPermission()) {
+            callback.invoke(origin, true, false); // (origin, allow, retain)
+            return;
+        }
+        if (Build.VERSION.SDK_INT < 23) { // 旧端末はインストール時許可済み
+            callback.invoke(origin, true, false);
+            return;
+        }
+        // OS権限が無ければ要求し、onGeoPermissionResult で応答する
+        pendingGeoOrigin = origin;
+        pendingGeoCb = callback;
+        act.requestPermissions(new String[]{
+                android.Manifest.permission.ACCESS_FINE_LOCATION,
+                android.Manifest.permission.ACCESS_COARSE_LOCATION}, REQ_GEO);
+    }
+
+    private boolean hasLocationPermission() {
+        if (Build.VERSION.SDK_INT < 23) return true;
+        return act.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                        == PackageManager.PERMISSION_GRANTED
+                || act.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+                        == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /** Activity#onRequestPermissionsResult から中継する */
+    public void onGeoPermissionResult(int requestCode, int[] grantResults) {
+        if (requestCode != REQ_GEO || pendingGeoCb == null) return;
+        boolean granted = false;
+        for (int r : grantResults) if (r == PackageManager.PERMISSION_GRANTED) granted = true;
+        pendingGeoCb.invoke(pendingGeoOrigin, granted, false);
+        if (!granted) Toast.makeText(act,
+                "位置情報の権限が無いため現在地を渡せません（設定→アプリ→権限で許可してください）",
+                Toast.LENGTH_LONG).show();
+        pendingGeoCb = null;
+        pendingGeoOrigin = null;
+    }
+
+    /** WebSettingsにgeolocationを有効化する。各Activityの設定時に呼ぶ。 */
+    public static void applyGeolocation(Context ctx, android.webkit.WebSettings s) {
+        s.setGeolocationEnabled(true);
+        // API24未満はDB保存先が無いとgeolocationが機能しない
+        try { s.setGeolocationDatabasePath(ctx.getFilesDir().getPath()); }
+        catch (Throwable ignore) {}
+    }
+
     // ---- window.open / target=_blank ----
 
     @Override
@@ -159,6 +222,42 @@ public class SnifferChrome extends WebChromeClient {
         String ua = s.getUserAgentString();
         if (ua == null) return;
         s.setUserAgentString(ua.replace("; wv", "").replace("Version/4.0 ", ""));
+    }
+
+    /**
+     * 「埋め込みWebViewであること」を隠してデスクトップ/モバイルChrome相当に見せる偽装スクリプト。
+     * claude.ai のOAuth同意画面は、埋め込みWebViewを検出すると「承認」ボタンを
+     * disabled のままにする（= Claude Codeログインの承認ボタンがグレーアウトして
+     * 押せない原因）。WebViewを露呈する主な手掛かりを2つ潰す:
+     *   1) window.chrome が存在しない（本物のChromeにはある）→ 定番のWebView判定
+     *   2) navigator.userAgentData.brands が「Android WebView」を申告する
+     *      （UA文字列から「; wv」を消してもこの構造化APIは残る）
+     * Chromeバージョンは実UAから動的に拾うのでWebView更新でもずれない。
+     */
+    static final String UA_CLIENT_HINTS_JS =
+            "(function(){if(window.__snifferUaCh)return;window.__snifferUaCh=1;try{"
+            // 1) window.chrome を生やす（本物Chrome相当の最小スタブ）
+            + "if(!window.chrome){var noop=function(){};window.chrome={"
+            + "app:{isInstalled:false,InstallState:{DISABLED:'disabled',INSTALLED:'installed',NOT_INSTALLED:'not_installed'},RunningState:{CANNOT_RUN:'cannot_run',READY_TO_RUN:'ready_to_run',RUNNING:'running'}},"
+            + "runtime:{OnInstalledReason:{},PlatformArch:{},connect:noop,sendMessage:noop},"
+            + "loadTimes:function(){return {requestTime:Date.now()/1000,startLoadTime:Date.now()/1000,commitLoadTime:Date.now()/1000,finishLoadTime:Date.now()/1000};},"
+            + "csi:function(){return {onloadT:Date.now(),pageT:Date.now(),startE:Date.now(),tran:15};}};}"
+            // 2) navigator.userAgentData を Google Chrome 相当へ
+            + "var ua=navigator.userAgent||'';"
+            + "var m=ua.match(/Chrome\\/(\\d+)(\\.[\\d.]+)?/);"
+            + "var major=m?m[1]:'149';"
+            + "var full=m?(m[1]+(m[2]||'.0.0.0')):'149.0.0.0';"
+            + "var brands=[{brand:'Chromium',version:major},{brand:'Google Chrome',version:major},{brand:'Not)A;Brand',version:'24'}];"
+            + "var fvl=[{brand:'Chromium',version:full},{brand:'Google Chrome',version:full},{brand:'Not)A;Brand',version:'24.0.0.0'}];"
+            + "var d={brands:brands,mobile:true,platform:'Android',"
+            + "getHighEntropyValues:function(h){return Promise.resolve({architecture:'arm',bitness:'64',brands:brands,fullVersionList:fvl,mobile:true,model:'',platform:'Android',platformVersion:'10.0.0',uaFullVersion:full,wow64:false});},"
+            + "toJSON:function(){return {brands:brands,mobile:true,platform:'Android'};}};"
+            + "Object.defineProperty(Navigator.prototype,'userAgentData',{get:function(){return d;},configurable:true});"
+            + "}catch(e){}})();";
+
+    /** onPageStartedから呼ぶ。埋め込みWebViewであることを隠してChrome相当に見せる。 */
+    public static void injectClientHints(WebView web) {
+        web.evaluateJavascript(UA_CLIENT_HINTS_JS, null);
     }
 
     // ---- 通常ダウンロード（静的ヘルパ） ----
@@ -235,13 +334,43 @@ public class SnifferChrome extends WebChromeClient {
             if (ua != null) r.addRequestHeader("User-Agent", ua);
             String ref = web.getUrl();
             if (ref != null) r.addRequestHeader("Referer", ref);
-            String fn = URLUtil.guessFileName(url, contentDisposition, effMime);
+            // Content-Dispositionの filename*=UTF-8''<タイトル> を優先（旧URLUtilはこれを無視しvideoId名になる）
+            String fn = fileNameFromDisposition(contentDisposition);
+            if (fn == null) fn = URLUtil.guessFileName(url, contentDisposition, effMime);
             r.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fn);
-            r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            r.setTitle(fn);
+            // 進捗バー＋完了通知を出す（VISIBLE_NOTIFY_COMPLETEDは進捗バーを出さない）
+            r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE);
             ((DownloadManager) act.getSystemService(Context.DOWNLOAD_SERVICE)).enqueue(r);
             Toast.makeText(act, "DL開始: " + fn, Toast.LENGTH_SHORT).show();
         } catch (Throwable e) {
             Toast.makeText(act, "DL失敗: " + e, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /** Content-Dispositionの RFC5987 filename*=UTF-8''… をデコードして本来のタイトル名を得る。無ければnull */
+    private static String fileNameFromDisposition(String cd) {
+        if (cd == null) return null;
+        try {
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("filename\\*\\s*=\\s*UTF-8''([^;\\r\\n]+)", java.util.regex.Pattern.CASE_INSENSITIVE)
+                .matcher(cd);
+            if (!m.find()) return null;
+            String name = java.net.URLDecoder.decode(m.group(1).trim(), "UTF-8");
+            name = name.replaceAll("[/\\\\\\r\\n\\t:*?\"<>|]", "_").trim();
+            if (name.isEmpty()) return null;
+            // FSのファイル名上限(255B)対策：拡張子を保って短縮
+            if (name.getBytes("UTF-8").length > 200) {
+                String ext = "";
+                int dot = name.lastIndexOf('.');
+                if (dot > 0 && name.length() - dot <= 6) { ext = name.substring(dot); name = name.substring(0, dot); }
+                while (name.getBytes("UTF-8").length > 200 - ext.length() && name.length() > 1)
+                    name = name.substring(0, name.length() - 1);
+                name = name + ext;
+            }
+            return name;
+        } catch (Throwable ignore) {
+            return null;
         }
     }
 

@@ -74,6 +74,7 @@ public class PwaActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 21)
             s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         SnifferChrome.applyChromeUa(s);
+        SnifferChrome.applyGeolocation(this, s);
         ua = s.getUserAgentString();
 
         CookieManager cm = CookieManager.getInstance();
@@ -119,6 +120,7 @@ public class PwaActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap f) {
                 pageUrl = url;
+                SnifferChrome.injectClientHints(view); // userAgentDataのWebView申告をChrome偽装(OAuth承認ボタン無効化回避)
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
                 for (String js : UserScripts.get(PwaActivity.this).forUrl(url, true))
                     view.evaluateJavascript(js, null);
@@ -216,6 +218,13 @@ public class PwaActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (chrome != null) chrome.onFileResult(requestCode, resultCode, data);
         super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        if (requestCode == SnifferChrome.REQ_GEO && chrome != null)
+            chrome.onGeoPermissionResult(requestCode, grantResults);
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
     }
 
     @Override

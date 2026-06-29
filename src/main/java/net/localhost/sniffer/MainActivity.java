@@ -1041,6 +1041,7 @@ public class MainActivity extends Activity {
             catch (Throwable ignore) {}
         }
         SnifferChrome.applyChromeUa(s);
+        SnifferChrome.applyGeolocation(this, s);
         ua = s.getUserAgentString();
 
         SnifferChrome.enableDownloads(this, web);
@@ -1109,6 +1110,7 @@ public class MainActivity extends Activity {
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap f) {
                 t.pageUrl = url;
                 if (t == curTab()) runOnUiThread(() -> urlBar.setText(url));
+                SnifferChrome.injectClientHints(view); // userAgentDataのWebView申告をChrome偽装(OAuth承認ボタン無効化回避)
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
                 for (String js : UserScripts.get(MainActivity.this).forUrl(url, true))
                     view.evaluateJavascript(js, null);
@@ -1289,6 +1291,14 @@ public class MainActivity extends Activity {
         // ファイルピッカーは開いたタブのchromeだけがfileCbを持つので全タブへ中継して問題ない
         for (Tab t : tabs) t.chrome.onFileResult(requestCode, resultCode, data);
         super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        // geolocationの権限要求結果を、要求したタブのchromeへ中継する
+        if (requestCode == SnifferChrome.REQ_GEO)
+            for (Tab t : tabs) t.chrome.onGeoPermissionResult(requestCode, grantResults);
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
     }
 
     @Override
