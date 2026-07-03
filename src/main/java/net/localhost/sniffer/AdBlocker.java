@@ -297,6 +297,9 @@ public class AdBlocker {
         cosmeticCount = gen.size() + siteCount;
         Log.i("AdBlock", "reload: domains=" + acc.domains.size()
                 + " generic=" + gen.size() + " site=" + siteCount);
+        Dbg.log(app, "AdBlock reload: domains=" + acc.domains.size()
+                + " generic=" + gen.size() + " site=" + siteCount
+                + " customs=" + c.size());
     }
 
     private static void parseFile(File f, Acc acc) {
@@ -416,9 +419,13 @@ public class AdBlocker {
                     last = e;
                 }
             }
-            if (done) ok++;
-            else {
+            if (done) {
+                ok++;
+                Dbg.log(app, "AdBlock update OK: " + src[0]
+                        + " (" + new File(dir, src[0]).length() + "B)");
+            } else {
                 Log.w("AdBlock", "取得失敗 " + src[0] + ": " + last);
+                Dbg.log(app, "AdBlock update FAIL: " + src[0] + " : " + last);
                 if (fails.length() > 0) fails.append(", ");
                 fails.append(src[0].replace(".txt", ""));
             }

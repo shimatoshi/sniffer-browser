@@ -129,6 +129,8 @@ public class SnifferChrome extends WebChromeClient {
     @Override
     public void onGeolocationPermissionsShowPrompt(String origin,
                                                    GeolocationPermissions.Callback callback) {
+        Dbg.log(act, "geo prompt: origin=" + origin
+                + " osPerm=" + hasLocationPermission() + " act=" + act.getClass().getSimpleName());
         // retain=true: originごとの許可をWebView側に永続化。毎回prompt扱いだと
         // watchPositionを使うサイト(Googleマップ等)で応答待ちタイムアウトが出る
         if (hasLocationPermission()) {
@@ -160,6 +162,7 @@ public class SnifferChrome extends WebChromeClient {
         if (requestCode != REQ_GEO || pendingGeoCb == null) return;
         boolean granted = false;
         for (int r : grantResults) if (r == PackageManager.PERMISSION_GRANTED) granted = true;
+        Dbg.log(act, "geo perm result: origin=" + pendingGeoOrigin + " granted=" + granted);
         pendingGeoCb.invoke(pendingGeoOrigin, granted, granted); // 許可時のみ永続化
         if (!granted) Toast.makeText(act,
                 "位置情報の権限が無いため現在地を渡せません（設定→アプリ→権限で許可してください）",
