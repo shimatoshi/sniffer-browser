@@ -30,6 +30,31 @@ public class Hits {
         return new ArrayList<>(map.values());
     }
 
+    /**
+     * 表示中ページと同一ホストで検出したヒットだけ返す（DL欄のサイト追従用）。
+     * pageUrlが非http（ホーム等）の時は全件。
+     */
+    public static synchronized List<MediaHit> forPage(String pageUrl) {
+        String host = hostOf(pageUrl);
+        if (host == null) return new ArrayList<>(map.values());
+        List<MediaHit> out = new ArrayList<>();
+        for (MediaHit h : map.values())
+            if (host.equals(hostOf(h.page))) out.add(h);
+        return out;
+    }
+
+    public static int countFor(String pageUrl) { return forPage(pageUrl).size(); }
+
+    private static String hostOf(String url) {
+        if (url == null || !url.startsWith("http")) return null;
+        try {
+            String h = Uri.parse(url).getHost();
+            return (h == null || h.isEmpty()) ? null : h;
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
     public static synchronized int size() { return map.size(); }
 
     public static synchronized void clear() {
@@ -59,6 +84,7 @@ public class Hits {
             if (h.ua == null) h.ua = fallbackUa;
             try { h.cookie = CookieManager.getInstance().getCookie(url); } catch (Throwable ignore) {}
             h.title = pageTitle;
+            h.page = pageUrl;
             add(h);
         } catch (Throwable ignore) {}
     }

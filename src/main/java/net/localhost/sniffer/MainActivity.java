@@ -93,8 +93,9 @@ public class MainActivity extends Activity {
 
         requestStorage();
 
-        Hits.setListener(n -> runOnUiThread(() -> btnDl.setText("📥" + n)));
-        btnDl.setOnClickListener(v -> showHits());
+        Hits.setListener(n -> runOnUiThread(this::updateDlBtn));
+        btnDl.setOnClickListener(v -> showHits(false));
+        btnDl.setOnLongClickListener(v -> { showHits(true); return true; });
         findViewById(R.id.btnBack).setOnClickListener(v -> {
             WebView w = curWeb();
             if (w != null && w.canGoBack()) w.goBack();
@@ -276,6 +277,13 @@ public class MainActivity extends Activity {
         urlBar.setText(u != null ? u : "");
         progress.setVisibility(View.GONE);
         updateTabBtn();
+        updateDlBtn();
+    }
+
+    /** 📥カウントを現在タブの表示中サイトで検出した件数に更新（DL欄のサイト追従） */
+    private void updateDlBtn() {
+        Tab t = curTab();
+        btnDl.setText("📥" + Hits.countFor(t != null ? t.pageUrl : null));
     }
 
     private void closeTab(int i) {
@@ -1111,7 +1119,7 @@ public class MainActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap f) {
                 t.pageUrl = url;
-                if (t == curTab()) runOnUiThread(() -> urlBar.setText(url));
+                if (t == curTab()) runOnUiThread(() -> { urlBar.setText(url); updateDlBtn(); });
                 SnifferChrome.injectClientHints(view); // userAgentDataのWebView申告をChrome偽装(OAuth承認ボタン無効化回避)
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
                 ad.injectCosmetics(view, url); // 要素隠しCSSを早期注入（描画前に広告枠を潰す）
@@ -1176,17 +1184,24 @@ public class MainActivity extends Activity {
 
     // ---- 動画検出・DL（従来どおり） ----
 
-    private void showHits() {
-        final List<MediaHit> hits = Hits.all();
+    /** DL候補一覧。通常は現在タブのサイトで検出した分だけ、allSites=true（📥長押し）で全件 */
+    private void showHits(boolean allSites) {
+        Tab t = curTab();
+        final List<MediaHit> hits = allSites ? Hits.all()
+                : Hits.forPage(t != null ? t.pageUrl : null);
         if (hits.isEmpty()) {
-            Toast.makeText(this, "まだ検出なし（動画を再生してみて）", Toast.LENGTH_SHORT).show();
+            int total = Hits.size();
+            Toast.makeText(this, total > 0
+                    ? "このサイトでは検出なし（📥長押しで全サイト " + total + " 件）"
+                    : "まだ検出なし（動画を再生してみて）", Toast.LENGTH_SHORT).show();
             return;
         }
         String[] items = new String[hits.size()];
         for (int i = 0; i < hits.size(); i++) items[i] = hits.get(i).display();
 
         new AlertDialog.Builder(this)
-                .setTitle("検出 " + hits.size() + " 件")
+                .setTitle("検出 " + hits.size() + " 件"
+                        + (allSites ? "（全サイト）" : "（このサイト・📥長押しで全部）"))
                 .setItems(items, (d, which) -> startDownload(hits.get(which)))
                 .setNeutralButton("クリア", (d, w) -> Hits.clear())
                 .setNegativeButton("閉じる", null)

@@ -8,6 +8,7 @@ public class MediaHit {
     public String cookie;
     public String ua;
     public String title;
+    public String page;     // 検出時に表示していたページURL（DL欄のサイト別フィルタ用）
     public String audioUrl; // 画質選択時に確定した別トラック音声playlist（null=自動解決）
     public String quality;  // 画質選択時の表示ラベル（null=自動）
 
