@@ -291,6 +291,71 @@ public class SnifferChrome extends WebChromeClient {
         web.evaluateJavascript(UA_CLIENT_HINTS_JS, null);
     }
 
+    // ---- YouTube広告ブロック ----
+
+    /**
+     * YouTube専用の広告除去スクリプト。ドメイン/CSSブロックでは消せない
+     * 「動画内広告(プレロール/ミッドロール)」に対応する（本編と同一ドメイン・
+     * 同一プレイヤー配信のためURL遮断もCSS隠しも効かない）。Brave/uBlock相当:
+     *   1) JSON.parse をフックし player応答の adPlacements/playerAds 等を除去
+     *   2) fetch(/youtubei/v1/player) 応答からも広告フィールドを除去（SPA遷移対策）
+     *   3) 再生中の広告(.ad-showing)は動画を終端へ飛ばし、スキップボタンを自動クリック
+     *   4) フィード/オーバーレイ広告のDOM要素を除去
+     * document_start相当(onPageStarted)で早期注入し、1回だけ仕掛ける。
+     */
+    static final String YOUTUBE_ADBLOCK_JS =
+            "(function(){if(window.__gobieYtAb)return;window.__gobieYtAb=1;try{"
+            + "var AD=['adPlacements','playerAds','adSlots','adBreakHeartbeatParams','playerLegacyDesktopWatchAdsRenderer'];"
+            + "function prune(o){try{if(o&&typeof o==='object'){for(var i=0;i<AD.length;i++){if(o[AD[i]]!=null)delete o[AD[i]];}}}catch(e){}return o;}"
+            // 0) 初回HTML内の ytInitialPlayerResponse を getter/setter でガード（inline代入時にprune）
+            + "try{var _r=undefined;Object.defineProperty(window,'ytInitialPlayerResponse',{configurable:true,"
+            + "get:function(){return _r;},set:function(v){_r=prune(v);}});}catch(e){}"
+            // 1) JSON.parse フック
+            + "var _p=JSON.parse;JSON.parse=function(){var r=_p.apply(this,arguments);return prune(r);};"
+            // 2) fetch(/youtubei/v1/player) 応答フック
+            + "var _f=window.fetch;if(_f){window.fetch=function(){var a=arguments;return _f.apply(this,a).then(function(resp){try{"
+            + "var u=(a[0]&&a[0].url)||a[0]||'';"
+            + "if(typeof u==='string'&&u.indexOf('/youtubei/v1/player')>=0){"
+            + "return resp.clone().json().then(function(j){prune(j);"
+            + "return new Response(JSON.stringify(j),{status:resp.status,statusText:resp.statusText,headers:{'content-type':'application/json'}});"
+            + "}).catch(function(){return resp;});}"
+            + "}catch(e){}return resp;});};}"
+            // 3+4) 再生中広告スキップ＋広告DOM除去
+            + "var RM=['.ytp-ad-overlay-slot','.ytp-ad-message-container','.ytp-ad-overlay-container',"
+            + "'ytd-action-companion-ad-renderer','ytd-display-ad-renderer','ytd-ad-slot-renderer',"
+            + "'ytd-in-feed-ad-layout-renderer','ytd-banner-promo-renderer','ytd-statement-banner-renderer',"
+            + "'ytm-companion-ad-renderer','ad-slot-renderer','ytm-promoted-video-renderer'];"
+            + "function tick(){try{"
+            + "var ad=document.querySelector('.ad-showing,.ytp-ad-player-overlay,.ytp-ad-player-overlay-layout');"
+            + "var v=document.querySelector('video');"
+            + "if(ad&&v&&isFinite(v.duration)&&v.duration>0){v.currentTime=v.duration;}"
+            + "var sk=document.querySelector('.ytp-ad-skip-button,.ytp-ad-skip-button-modern,.ytp-skip-ad-button');"
+            + "if(sk)sk.click();"
+            + "for(var i=0;i<RM.length;i++){var es=document.querySelectorAll(RM[i]);for(var j=0;j<es.length;j++)es[j].remove();}"
+            + "}catch(e){}}"
+            + "setInterval(tick,400);"
+            + "}catch(e){}})();";
+
+    /** YouTube系URLか（youtube.com / m.youtube.com / youtube-nocookie.com） */
+    public static boolean isYoutube(String url) {
+        if (url == null) return false;
+        try {
+            String h = Uri.parse(url).getHost();
+            if (h == null) return false;
+            h = h.toLowerCase();
+            return h.endsWith("youtube.com") || h.endsWith("youtube-nocookie.com")
+                    || h.endsWith("youtubei.googleapis.com");
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    /** onPageStarted/Finishedから呼ぶ。YouTubeなら広告除去スクリプトを注入する。 */
+    public static void injectYoutubeAdblock(WebView web, String url) {
+        if (!AdBlocker.get(web.getContext()).adblockOn()) return;
+        if (isYoutube(url)) web.evaluateJavascript(YOUTUBE_ADBLOCK_JS, null);
+    }
+
     // ---- 通常ダウンロード（静的ヘルパ） ----
 
     static final String BLOB_IFACE = "__snifferBlob";

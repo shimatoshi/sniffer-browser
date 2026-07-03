@@ -122,6 +122,7 @@ public class PwaActivity extends Activity {
                 pageUrl = url;
                 SnifferChrome.injectClientHints(view); // userAgentDataのWebView申告をChrome偽装(OAuth承認ボタン無効化回避)
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
+                SnifferChrome.injectYoutubeAdblock(view, url); // YouTube動画内広告の除去(YouTube PWA対応)
                 AdBlocker.get(PwaActivity.this).injectCosmetics(view, url); // 要素隠し早期注入
                 for (String js : UserScripts.get(PwaActivity.this).forUrl(url, true))
                     view.evaluateJavascript(js, null);

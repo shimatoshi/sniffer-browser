@@ -1244,6 +1244,7 @@ public class MainActivity extends Activity {
                 if (t == curTab()) runOnUiThread(() -> { urlBar.setText(url); updateDlBtn(); });
                 SnifferChrome.injectClientHints(view); // userAgentDataのWebView申告をChrome偽装(OAuth承認ボタン無効化回避)
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
+                SnifferChrome.injectYoutubeAdblock(view, url); // YouTube動画内広告の除去(早期注入でJSON.parseフック)
                 ad.injectCosmetics(view, url); // 要素隠しCSSを早期注入（描画前に広告枠を潰す）
                 for (String js : UserScripts.get(MainActivity.this).forUrl(url, true))
                     view.evaluateJavascript(js, null);
