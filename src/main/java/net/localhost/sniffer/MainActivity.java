@@ -507,6 +507,7 @@ public class MainActivity extends Activity {
                     this, PwaActivity.class);
             i.putExtra("pwa_title", p.label());
             if (p.theme != null) i.putExtra("pwa_theme", p.theme);
+            if (p.desktop) i.putExtra("pwa_desktop", true);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
             startActivity(i);
         } catch (Throwable e) {
@@ -964,7 +965,7 @@ public class MainActivity extends Activity {
                 .setTitle("PWAとしてホームに追加")
                 .setMessage((t.pageTitle == null || t.pageTitle.isEmpty() ? t.pageUrl : t.pageTitle)
                         + "\n\nこのサイトをstandaloneアプリ化する？")
-                .setPositiveButton("追加", (d, w) -> PwaInstaller.install(this, t.web, t.pageUrl, t.pageTitle))
+                .setPositiveButton("追加", (d, w) -> PwaInstaller.install(this, t.web, t.pageUrl, t.pageTitle, t.desktop))
                 .setNegativeButton("やめる", null)
                 .show();
     }

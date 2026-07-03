@@ -33,6 +33,7 @@ public class PwaActivity extends Activity {
     private volatile int videoW, videoH;
     private boolean inPip = false;
     private boolean started = false;
+    private boolean desktop = false; // PC版サイト表示（デスクトップUA）で開くPWA
 
     // YouTube: www起点PWAがモバイルUAでm.youtube.comへ飛ばされるのを差し戻す用
     private int ytRewrites = 0;
@@ -66,6 +67,12 @@ public class PwaActivity extends Activity {
         String url = (it != null && it.getData() != null) ? it.getData().toString() : "about:blank";
         String title = it != null ? it.getStringExtra("pwa_title") : null;
         String theme = it != null ? it.getStringExtra("pwa_theme") : null;
+        desktop = it != null && it.getBooleanExtra("pwa_desktop", false);
+        // 旧ショートカット(extra無し)からの起動は台帳のフラグで判定
+        if (!desktop) {
+            try { desktop = new BrowserDb(getApplicationContext()).isPwaDesktop(url); }
+            catch (Throwable ignore) {}
+        }
 
         try { homeHost = Uri.parse(url).getHost(); } catch (Throwable ignore) {}
         if (homeHost == null) homeHost = "";
@@ -94,15 +101,24 @@ public class PwaActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
-        // wide viewport/overview無効: PWAはviewport meta持ち前提。有効だとYouTube www等で
-        // 読み込み中に一瞬広がったコンテンツへoverviewがズームアウトしたまま固着し
-        // (pageScale 0.897)、position:fixed要素の基準幅が438pxになって左右が見切れる
-        s.setLoadWithOverviewMode(false);
-        s.setUseWideViewPort(false);
+        if (desktop) {
+            // PC版PWA: viewport metaが無い前提なのでwide viewport+ピンチズームを有効化
+            s.setLoadWithOverviewMode(true);
+            s.setUseWideViewPort(true);
+            s.setBuiltInZoomControls(true);
+            s.setDisplayZoomControls(false);
+        } else {
+            // wide viewport/overview無効: PWAはviewport meta持ち前提。有効だとYouTube www等で
+            // 読み込み中に一瞬広がったコンテンツへoverviewがズームアウトしたまま固着し
+            // (pageScale 0.897)、position:fixed要素の基準幅が438pxになって左右が見切れる
+            s.setLoadWithOverviewMode(false);
+            s.setUseWideViewPort(false);
+        }
         s.setSupportMultipleWindows(true); // window.open/target=_blank をonCreateWindowで受ける
         if (Build.VERSION.SDK_INT >= 21)
             s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-        SnifferChrome.applyChromeUa(s);
+        if (desktop) SnifferChrome.applyUaMode(s, true); // 言語切替等のリロードでもPC版に留める
+        else SnifferChrome.applyChromeUa(s);
         SnifferChrome.applyGeolocation(this, s);
         ua = s.getUserAgentString();
 

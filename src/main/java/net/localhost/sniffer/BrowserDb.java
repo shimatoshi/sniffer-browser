@@ -38,9 +38,10 @@ public class BrowserDb extends SQLiteOpenHelper {
     public static class Pwa {
         public final long id;
         public final String url, name, theme, icon; // icon = PNGのbase64（dataURI本体）
-        Pwa(long id, String url, String name, String theme, String icon) {
+        public final boolean desktop; // PC版サイト表示（デスクトップUA）で開く
+        Pwa(long id, String url, String name, String theme, String icon, boolean desktop) {
             this.id = id; this.url = url; this.name = name;
-            this.theme = theme; this.icon = icon;
+            this.theme = theme; this.icon = icon; this.desktop = desktop;
         }
         public String label() {
             return (name == null || name.isEmpty()) ? url : name;
@@ -48,7 +49,7 @@ public class BrowserDb extends SQLiteOpenHelper {
     }
 
     public BrowserDb(Context ctx) {
-        super(ctx, "browser.db", null, 7);
+        super(ctx, "browser.db", null, 8);
     }
 
     @Override
@@ -73,12 +74,17 @@ public class BrowserDb extends SQLiteOpenHelper {
         if (oldV < 5) createOffline(db);
         if (oldV < 6) createFeed(db);
         if (oldV < 7) createPwas(db);
+        if (oldV < 8) {
+            try { db.execSQL("ALTER TABLE pwas ADD COLUMN desktop INTEGER NOT NULL DEFAULT 0"); }
+            catch (Throwable ignore) {} // v7で作り直した直後などで既にある場合
+        }
     }
 
     private void createPwas(SQLiteDatabase db) {
         // ホームに並べるインストール済みPWA（start_url / 表示名 / theme_color / アイコンpng）
         db.execSQL("CREATE TABLE IF NOT EXISTS pwas (id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                + " url TEXT NOT NULL UNIQUE, name TEXT, theme TEXT, icon TEXT, ts INTEGER NOT NULL)");
+                + " url TEXT NOT NULL UNIQUE, name TEXT, theme TEXT, icon TEXT,"
+                + " desktop INTEGER NOT NULL DEFAULT 0, ts INTEGER NOT NULL)");
     }
 
     private void createFeed(SQLiteDatabase db) {
@@ -140,26 +146,28 @@ public class BrowserDb extends SQLiteOpenHelper {
     // ---- インストール済みPWA（ホーム表示） ----
 
     /** PWA追加/再追加時。同一start_urlは最新の名前・アイコンで上書き。 */
-    public void upsertPwa(String url, String name, String theme, String iconBase64) {
+    public void upsertPwa(String url, String name, String theme, String iconBase64, boolean desktop) {
         if (url == null || url.isEmpty()) return;
         ContentValues v = new ContentValues();
         v.put("url", url);
         v.put("name", name);
         v.put("theme", theme);
         v.put("icon", iconBase64);
+        v.put("desktop", desktop ? 1 : 0);
         v.put("ts", System.currentTimeMillis());
         getWritableDatabase().insertWithOnConflict(
                 "pwas", null, v, SQLiteDatabase.CONFLICT_REPLACE);
     }
 
     /** 既存ショートカットからのバックフィル用。すでに登録済みなら触らない（実アイコンを潰さない）。 */
-    public void insertPwaIfAbsent(String url, String name, String theme, String iconBase64) {
+    public void insertPwaIfAbsent(String url, String name, String theme, String iconBase64, boolean desktop) {
         if (url == null || url.isEmpty()) return;
         ContentValues v = new ContentValues();
         v.put("url", url);
         v.put("name", name);
         v.put("theme", theme);
         v.put("icon", iconBase64);
+        v.put("desktop", desktop ? 1 : 0);
         v.put("ts", System.currentTimeMillis());
         getWritableDatabase().insertWithOnConflict(
                 "pwas", null, v, SQLiteDatabase.CONFLICT_IGNORE);
@@ -171,21 +179,31 @@ public class BrowserDb extends SQLiteOpenHelper {
 
     public Pwa getPwa(long id) {
         Cursor c = getReadableDatabase().rawQuery(
-                "SELECT id, url, name, theme, icon FROM pwas WHERE id=?",
+                "SELECT id, url, name, theme, icon, desktop FROM pwas WHERE id=?",
                 new String[]{String.valueOf(id)});
         Pwa p = c.moveToFirst()
-                ? new Pwa(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4))
+                ? new Pwa(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4), c.getInt(5) != 0)
                 : null;
         c.close();
         return p;
     }
 
+    /** PwaActivityが旧ショートカット（pwa_desktop extra無し）から起動された時のフォールバック照会。 */
+    public boolean isPwaDesktop(String url) {
+        if (url == null || url.isEmpty()) return false;
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT desktop FROM pwas WHERE url=?", new String[]{url});
+        boolean d = c.moveToFirst() && c.getInt(0) != 0;
+        c.close();
+        return d;
+    }
+
     public List<Pwa> listPwas() {
         List<Pwa> out = new ArrayList<>();
         Cursor c = getReadableDatabase().rawQuery(
-                "SELECT id, url, name, theme, icon FROM pwas ORDER BY id", null);
+                "SELECT id, url, name, theme, icon, desktop FROM pwas ORDER BY id", null);
         while (c.moveToNext())
-            out.add(new Pwa(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4)));
+            out.add(new Pwa(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4), c.getInt(5) != 0));
         c.close();
         return out;
     }
