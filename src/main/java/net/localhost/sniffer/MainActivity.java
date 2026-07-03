@@ -1067,7 +1067,7 @@ public class MainActivity extends Activity {
         ua = s.getUserAgentString();
 
         SnifferChrome.enableDownloads(this, web);
-        SnifferChrome.enableImageSave(this, web);
+        SnifferChrome.enableLongPress(this, web, url -> createTab(url, true));
 
         // バックグラウンド再生: 再生状態を監視し、裏で再生中なら前面サービスで延命
         Media.track(web, new Media.PlayState() {

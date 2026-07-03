@@ -82,7 +82,7 @@ public class PwaActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 21) cm.setAcceptThirdPartyCookies(web, true);
 
         SnifferChrome.enableDownloads(this, web);
-        SnifferChrome.enableImageSave(this, web);
+        SnifferChrome.enableLongPress(this, web, null); // PWA窓はタブ無し=リンクはコピーのみ
 
         // バックグラウンド再生: 再生状態を監視し、裏に回ったら前面サービスで延命する
         Media.track(web, new Media.PlayState() {

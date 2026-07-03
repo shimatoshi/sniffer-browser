@@ -400,37 +400,83 @@ public class SnifferChrome extends WebChromeClient {
         }
     }
 
-    // ---- 画像長押し保存 ----
+    // ---- 長押しメニュー（リンク/画像） ----
 
-    /** 画像長押し → 保存/URLコピーのメニュー。IMAGE_TYPEとリンク付き画像の両方を拾う */
-    public static void enableImageSave(Activity act, WebView web) {
+    /** 「新しいタブで開く」の開き先。MainActivityはcreateTab、PwaActivityはnull（項目非表示） */
+    public interface LinkOpener { void open(String url); }
+
+    /**
+     * 長押し → リンク（新しいタブで開く/URLコピー）・画像（保存/URLコピー）のメニュー。
+     * リンク付き画像はアンカーhrefを requestFocusNodeHref で非同期に取ってから出す。
+     */
+    public static void enableLongPress(Activity act, WebView web, LinkOpener opener) {
         web.setOnLongClickListener(v -> {
             // ホーム(gobie://)では横取りせずページのcontextmenu(PWA長押しメニュー)に渡す
             String cur = ((WebView) v).getUrl();
             if (cur != null && cur.startsWith("gobie://")) return false;
             WebView.HitTestResult hit = ((WebView) v).getHitTestResult();
             int type = hit.getType();
-            if (type != WebView.HitTestResult.IMAGE_TYPE
-                    && type != WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE) return false;
-            final String url = hit.getExtra();
-            if (url == null || url.isEmpty()) return false;
-            String label = url.startsWith("data:")
-                    ? "data:画像" : (url.length() > 120 ? url.substring(0, 120) + "…" : url);
-            new android.app.AlertDialog.Builder(act)
-                    .setTitle(label)
-                    .setItems(new String[]{"画像を保存", "画像URLをコピー"}, (d, w) -> {
-                        if (w == 0) {
-                            downloadUrl(act, web, url, null, guessImageMime(url));
-                        } else {
-                            android.content.ClipboardManager cm = (android.content.ClipboardManager)
-                                    act.getSystemService(Context.CLIPBOARD_SERVICE);
-                            cm.setPrimaryClip(android.content.ClipData.newPlainText("url", url));
-                            Toast.makeText(act, "コピーした", Toast.LENGTH_SHORT).show();
-                        }
-                    })
-                    .show();
-            return true;
+            final String extra = hit.getExtra();
+            if (extra == null || extra.isEmpty()) return false;
+            if (type == WebView.HitTestResult.SRC_ANCHOR_TYPE) {
+                showLongPressMenu(act, web, extra, null, opener);
+                return true;
+            }
+            if (type == WebView.HitTestResult.IMAGE_TYPE) {
+                showLongPressMenu(act, web, null, extra, opener);
+                return true;
+            }
+            if (type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE) {
+                // extra=画像URL。リンク先hrefはmsgの"url"で返る
+                android.os.Message msg = new android.os.Handler(
+                        android.os.Looper.getMainLooper(), mm -> {
+                            showLongPressMenu(act, web, mm.getData().getString("url"), extra, opener);
+                            return true;
+                        }).obtainMessage();
+                ((WebView) v).requestFocusNodeHref(msg);
+                return true;
+            }
+            return false;
         });
+    }
+
+    private static void showLongPressMenu(Activity act, WebView web,
+                                          String link, String img, LinkOpener opener) {
+        final java.util.List<String> items = new java.util.ArrayList<>();
+        final java.util.List<Runnable> actions = new java.util.ArrayList<>();
+        boolean linkOk = link != null && (link.startsWith("http://") || link.startsWith("https://"));
+        if (linkOk && opener != null) {
+            final String l = link;
+            items.add("↗ 新しいタブで開く");
+            actions.add(() -> opener.open(l));
+        }
+        if (linkOk) {
+            final String l = link;
+            items.add("リンクURLをコピー");
+            actions.add(() -> copyText(act, l));
+        }
+        if (img != null && !img.isEmpty()) {
+            final String i = img;
+            items.add("画像を保存");
+            actions.add(() -> downloadUrl(act, web, i, null, guessImageMime(i)));
+            items.add("画像URLをコピー");
+            actions.add(() -> copyText(act, i));
+        }
+        if (items.isEmpty()) return;
+        String head = linkOk ? link : img;
+        String label = head.startsWith("data:")
+                ? "data:画像" : (head.length() > 120 ? head.substring(0, 120) + "…" : head);
+        new android.app.AlertDialog.Builder(act)
+                .setTitle(label)
+                .setItems(items.toArray(new String[0]), (d, w) -> actions.get(w).run())
+                .show();
+    }
+
+    private static void copyText(Activity act, String s) {
+        android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                act.getSystemService(Context.CLIPBOARD_SERVICE);
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("url", s));
+        Toast.makeText(act, "コピーした", Toast.LENGTH_SHORT).show();
     }
 
     private static String guessImageMime(String url) {
