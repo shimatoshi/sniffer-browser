@@ -73,6 +73,8 @@ public class MainActivity extends Activity {
         volatile boolean external = false;
         // PC版サイト表示（デスクトップUA）中か。タブ単位で切替。
         volatile boolean desktop = false;
+        // ページズーム%（100=等倍）。PC版はviewport幅上書き、モバイル版はtextZoomで適用。
+        volatile int zoom = 100;
     }
 
     private Tab curTab() { return (cur >= 0 && cur < tabs.size()) ? tabs.get(cur) : null; }
@@ -385,6 +387,7 @@ public class MainActivity extends Activity {
         Menu m = pm.getMenu();
         m.add(0, 2, 0, "⟳ 再読み込み");
         m.add(0, 12, 0, t.desktop ? "📱 モバイル版に戻す" : "🖥 PC版サイト");
+        m.add(0, 17, 0, "🔍 ズーム (" + t.zoom + "%)");
         // YouTube動画ページなら動画DL項目を出す
         final String ytId = SnifferChrome.youtubeVideoId(t.web.getUrl());
         if (ytId != null) {
@@ -428,6 +431,8 @@ public class MainActivity extends Activity {
                 case 12:
                     t.desktop = !t.desktop;
                     SnifferChrome.applyUaMode(t.web.getSettings(), t.desktop);
+                    // ズームの適用方式が変わる（PC版=viewport幅/モバイル=textZoom）ので付け替え
+                    t.web.getSettings().setTextZoom(t.desktop ? 100 : t.zoom);
                     t.web.reload();
                     Toast.makeText(this, t.desktop ? "🖥 PC版で表示" : "📱 モバイル版で表示",
                             Toast.LENGTH_SHORT).show();
@@ -442,6 +447,7 @@ public class MainActivity extends Activity {
                     if (ytId != null)
                         SnifferChrome.downloadYoutube(this, ytId, t.web.getTitle(), true);
                     return true;
+                case 17: showZoomDialog(t); return true;
             }
             return false;
         });
@@ -508,6 +514,7 @@ public class MainActivity extends Activity {
             i.putExtra("pwa_title", p.label());
             if (p.theme != null) i.putExtra("pwa_theme", p.theme);
             if (p.desktop) i.putExtra("pwa_desktop", true);
+            if (p.zoom != 100) i.putExtra("pwa_zoom", p.zoom);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
             startActivity(i);
         } catch (Throwable e) {
@@ -960,12 +967,33 @@ public class MainActivity extends Activity {
         });
     }
 
+    /** ページズーム選択。PC版はviewport幅上書き（Chromeのページズーム相当）、モバイル版はtextZoom。 */
+    private void showZoomDialog(Tab t) {
+        final int[] levels = {75, 90, 100, 110, 125, 150, 175, 200};
+        String[] labels = new String[levels.length];
+        int checked = 2;
+        for (int i = 0; i < levels.length; i++) {
+            labels[i] = levels[i] + "%";
+            if (levels[i] == t.zoom) checked = i;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("🔍 ページズーム")
+                .setSingleChoiceItems(labels, checked, (d, w) -> {
+                    t.zoom = levels[w];
+                    if (t.desktop) SnifferChrome.injectDesktopZoom(t.web, t.zoom); // 即時反映(リロード不要)
+                    else t.web.getSettings().setTextZoom(t.zoom);
+                    d.dismiss();
+                })
+                .setNegativeButton("閉じる", null)
+                .show();
+    }
+
     private void showPwaDialog(Tab t) {
         new AlertDialog.Builder(this)
                 .setTitle("PWAとしてホームに追加")
                 .setMessage((t.pageTitle == null || t.pageTitle.isEmpty() ? t.pageUrl : t.pageTitle)
                         + "\n\nこのサイトをstandaloneアプリ化する？")
-                .setPositiveButton("追加", (d, w) -> PwaInstaller.install(this, t.web, t.pageUrl, t.pageTitle, t.desktop))
+                .setPositiveButton("追加", (d, w) -> PwaInstaller.install(this, t.web, t.pageUrl, t.pageTitle, t.desktop, t.zoom))
                 .setNegativeButton("やめる", null)
                 .show();
     }
@@ -1280,6 +1308,7 @@ public class MainActivity extends Activity {
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
                 SnifferChrome.injectYoutubeAdblock(view, url); // YouTube動画内広告の除去(早期注入でJSON.parseフック)
                 SnifferChrome.injectYoutubeNarrowFix(view, url); // www狭幅のはみ出し修正
+                if (t.desktop && t.zoom != 100) SnifferChrome.injectDesktopZoom(view, t.zoom);
                 ad.injectCosmetics(view, url); // 要素隠しCSSを早期注入（描画前に広告枠を潰す）
                 for (String js : UserScripts.get(MainActivity.this).forUrl(url, true))
                     view.evaluateJavascript(js, null);
@@ -1290,6 +1319,7 @@ public class MainActivity extends Activity {
                 t.pageTitle = view.getTitle();
                 Media.injectTracker(view);
                 SnifferChrome.injectYoutubeNarrowFix(view, url); // started時は旧documentで消えるため再注入
+                if (t.desktop && t.zoom != 100) SnifferChrome.injectDesktopZoom(view, t.zoom);
                 ad.injectCosmetics(view, url); // 動的挿入対策に読み込み完了時も上書き注入
                 db.addHistory(url, t.pageTitle);
                 OfflineStore.get(MainActivity.this).autoSave(view, db, url, t.pageTitle);

@@ -326,6 +326,24 @@ public class SnifferChrome extends WebChromeClient {
         web.evaluateJavascript(UA_CLIENT_HINTS_JS, null);
     }
 
+    /**
+     * PC版サイトのページズーム（Chromeの Ctrl+± 相当）。
+     * viewport metaの幅を 980*100/percent に上書きすると、サイトは狭い幅でレイアウトされ
+     * WebViewが画面幅まで拡大表示する＝横スクロール無しで全体が大きくなる。
+     * useWideViewPort=true（PC版表示）が前提。document差し替えで消えるので
+     * onPageStarted/onPageFinished の両方から呼ぶこと。
+     */
+    public static void injectDesktopZoom(WebView web, int percent) {
+        if (percent <= 0) return;
+        int w = Math.max(320, Math.round(98000f / percent));
+        web.evaluateJavascript("(function(){try{"
+                + "var m=document.querySelector('meta[name=viewport]');"
+                + "if(!m){m=document.createElement('meta');m.setAttribute('name','viewport');"
+                + "(document.head||document.documentElement).appendChild(m);}"
+                + "m.setAttribute('content','width=" + w + "');"
+                + "}catch(e){}})();", null);
+    }
+
     // ---- YouTube広告ブロック ----
 
     /**

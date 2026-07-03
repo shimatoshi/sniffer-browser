@@ -34,6 +34,7 @@ public class PwaActivity extends Activity {
     private boolean inPip = false;
     private boolean started = false;
     private boolean desktop = false; // PC版サイト表示（デスクトップUA）で開くPWA
+    private int zoom = 100; // ページズーム%（PC版=viewport幅上書き、モバイル版=textZoom）
 
     // YouTube: www起点PWAがモバイルUAでm.youtube.comへ飛ばされるのを差し戻す用
     private int ytRewrites = 0;
@@ -68,10 +69,13 @@ public class PwaActivity extends Activity {
         String title = it != null ? it.getStringExtra("pwa_title") : null;
         String theme = it != null ? it.getStringExtra("pwa_theme") : null;
         desktop = it != null && it.getBooleanExtra("pwa_desktop", false);
+        zoom = it != null ? it.getIntExtra("pwa_zoom", 100) : 100;
         // 旧ショートカット(extra無し)からの起動は台帳のフラグで判定
-        if (!desktop) {
-            try { desktop = new BrowserDb(getApplicationContext()).isPwaDesktop(url); }
-            catch (Throwable ignore) {}
+        if (!desktop && zoom == 100) {
+            try {
+                BrowserDb.Pwa p = new BrowserDb(getApplicationContext()).getPwaByUrl(url);
+                if (p != null) { desktop = p.desktop; zoom = p.zoom; }
+            } catch (Throwable ignore) {}
         }
 
         try { homeHost = Uri.parse(url).getHost(); } catch (Throwable ignore) {}
@@ -119,6 +123,7 @@ public class PwaActivity extends Activity {
             s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         if (desktop) SnifferChrome.applyUaMode(s, true); // 言語切替等のリロードでもPC版に留める
         else SnifferChrome.applyChromeUa(s);
+        if (!desktop && zoom != 100) s.setTextZoom(zoom); // PC版のズームはロード時のviewport幅注入で行う
         SnifferChrome.applyGeolocation(this, s);
         ua = s.getUserAgentString();
 
@@ -187,6 +192,7 @@ public class PwaActivity extends Activity {
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
                 SnifferChrome.injectYoutubeAdblock(view, url); // YouTube動画内広告の除去(YouTube PWA対応)
                 SnifferChrome.injectYoutubeNarrowFix(view, url); // www狭幅のはみ出し修正
+                if (desktop && zoom != 100) SnifferChrome.injectDesktopZoom(view, zoom);
                 AdBlocker.get(PwaActivity.this).injectCosmetics(view, url); // 要素隠し早期注入
                 for (String js : UserScripts.get(PwaActivity.this).forUrl(url, true))
                     view.evaluateJavascript(js, null);
@@ -197,6 +203,7 @@ public class PwaActivity extends Activity {
                 pageTitle = view.getTitle();
                 Media.injectTracker(view);
                 SnifferChrome.injectYoutubeNarrowFix(view, url); // started時は旧documentで消えるため再注入
+                if (desktop && zoom != 100) SnifferChrome.injectDesktopZoom(view, zoom);
                 AdBlocker.get(PwaActivity.this).injectCosmetics(view, url); // 動的挿入対策の上書き注入
                 for (String js : UserScripts.get(PwaActivity.this).forUrl(url, false))
                     view.evaluateJavascript(js, null);

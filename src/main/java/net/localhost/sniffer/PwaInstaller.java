@@ -30,20 +30,20 @@ import java.net.URL;
  */
 public class PwaInstaller {
 
-    /** UIスレッドから呼ぶこと（evaluateJavascript使用）。desktop=PC版サイト表示のまま開くPWAにする */
-    public static void install(Activity act, WebView web, String pageUrl, String pageTitle, boolean desktop) {
+    /** UIスレッドから呼ぶこと（evaluateJavascript使用）。desktop=PC版サイト表示のまま開くPWAにする。zoom=ページズーム%(100=等倍) */
+    public static void install(Activity act, WebView web, String pageUrl, String pageTitle, boolean desktop, int zoom) {
         final Bitmap favicon = web.getFavicon(); // UIスレッドで先に確保
         final String uaStr = web.getSettings().getUserAgentString();
         web.evaluateJavascript(
                 "(function(){var l=document.querySelector('link[rel~=\"manifest\"]');return l?l.href:'';})()",
                 value -> {
                     String manifestUrl = unquote(value);
-                    new Thread(() -> buildAndPin(act, manifestUrl, pageUrl, pageTitle, favicon, uaStr, desktop)).start();
+                    new Thread(() -> buildAndPin(act, manifestUrl, pageUrl, pageTitle, favicon, uaStr, desktop, zoom)).start();
                 });
     }
 
     private static void buildAndPin(Activity act, String manifestUrl, String pageUrl,
-                                    String pageTitle, Bitmap favicon, String ua, boolean desktop) {
+                                    String pageTitle, Bitmap favicon, String ua, boolean desktop, int zoom) {
         String name = pageTitle;
         String start = pageUrl;
         String theme = null;
@@ -75,9 +75,9 @@ public class PwaInstaller {
         // ブラウザホームに並べるため台帳へ保存（start_url一意・アイコン込み）
         try {
             new BrowserDb(act.getApplicationContext())
-                    .upsertPwa(fStart, fName, fTheme, pngBase64(fIcon), desktop);
+                    .upsertPwa(fStart, fName, fTheme, pngBase64(fIcon), desktop, zoom);
         } catch (Throwable ignore) {}
-        act.runOnUiThread(() -> pin(act, fStart, fName, fTheme, fIcon, desktop));
+        act.runOnUiThread(() -> pin(act, fStart, fName, fTheme, fIcon, desktop, zoom));
     }
 
     /**
@@ -100,7 +100,8 @@ public class PwaInstaller {
                 String name = lbl != null ? lbl.toString() : "";
                 String theme = it.getStringExtra("pwa_theme");
                 boolean desktop = it.getBooleanExtra("pwa_desktop", false);
-                db.insertPwaIfAbsent(url, name, theme, pngBase64(letterIcon(name)), desktop);
+                int zoom = it.getIntExtra("pwa_zoom", 100);
+                db.insertPwaIfAbsent(url, name, theme, pngBase64(letterIcon(name)), desktop, zoom);
             }
         } catch (Throwable ignore) {}
     }
@@ -112,11 +113,12 @@ public class PwaInstaller {
         return android.util.Base64.encodeToString(bo.toByteArray(), android.util.Base64.NO_WRAP);
     }
 
-    private static void pin(Activity act, String start, String name, String theme, Bitmap icon, boolean desktop) {
+    private static void pin(Activity act, String start, String name, String theme, Bitmap icon, boolean desktop, int zoom) {
         Intent launch = new Intent(Intent.ACTION_VIEW, Uri.parse(start), act, PwaActivity.class);
         launch.putExtra("pwa_title", name);
         if (theme != null) launch.putExtra("pwa_theme", theme);
         if (desktop) launch.putExtra("pwa_desktop", true);
+        if (zoom > 0 && zoom != 100) launch.putExtra("pwa_zoom", zoom);
         // NEW_DOCUMENTのみ（MULTIPLE_TASKは付けない）。documentLaunchMode=intoExistingと組で
         // 同一URLのPWAは既存タスクを再利用→再起動でタスクが増殖しない。別URLは別タスクのまま。
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
