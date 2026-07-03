@@ -23,7 +23,7 @@ import android.webkit.WebViewClient;
  */
 public class PwaActivity extends Activity {
 
-    private WebView web;
+    private SnifferWebView web;
     private SnifferChrome chrome;
     private String homeHost = "";
     private volatile String pageUrl = "";
@@ -47,7 +47,7 @@ public class PwaActivity extends Activity {
         if (homeHost == null) homeHost = "";
         pageUrl = url;
 
-        web = new WebView(this);
+        web = new SnifferWebView(this); // バックグラウンド再生対応
         setContentView(web);
         setupWeb();
 
@@ -88,6 +88,7 @@ public class PwaActivity extends Activity {
         Media.track(web, new Media.PlayState() {
             @Override public void onPlaying(boolean playing) {
                 mediaPlaying = playing;
+                web.setKeepPlaying(playing); // 裏でもメディアを止めない(バックグラウンド再生)
                 runOnUiThread(PwaActivity.this::syncPlaybackService);
             }
             @Override public void onVideoSize(int w, int h) {

@@ -356,6 +356,118 @@ public class SnifferChrome extends WebChromeClient {
         if (isYoutube(url)) web.evaluateJavascript(YOUTUBE_ADBLOCK_JS, null);
     }
 
+    // ---- YouTube動画ダウンロード（ShimaTube応用） ----
+
+    /** ShimaTubeバックエンドURL（cloudflared tunnelは変わるのでresolveで取得）のプロセス内キャッシュ */
+    private static volatile String shimatubeBackend;
+
+    /**
+     * YouTube系URLから動画IDを抽出。watch?v= / youtu.be/ / shorts/ / live/ / embed/ 対応。
+     * 動画ページでなければ null（=DLメニューを出さない）。
+     */
+    public static String youtubeVideoId(String url) {
+        if (url == null) return null;
+        try {
+            Uri u = Uri.parse(url);
+            String h = u.getHost();
+            if (h == null) return null;
+            h = h.toLowerCase();
+            String id = null;
+            if (h.endsWith("youtu.be")) {
+                String p = u.getPath();
+                if (p != null && p.length() > 1) id = p.substring(1).split("/")[0];
+            } else if (h.endsWith("youtube.com") || h.endsWith("youtube-nocookie.com")) {
+                String p = u.getPath();
+                if (p != null && (p.startsWith("/shorts/") || p.startsWith("/live/") || p.startsWith("/embed/"))) {
+                    String[] seg = p.split("/");
+                    if (seg.length >= 3) id = seg[2];
+                } else {
+                    id = u.getQueryParameter("v");
+                }
+            }
+            if (id == null) return null;
+            // 動画IDは11文字の [A-Za-z0-9_-]。満たさなければ弾く（誤爆防止）
+            return id.matches("[A-Za-z0-9_-]{11}") ? id : null;
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
+    /** url-board の resolve から現在のShimaTubeバックエンドURLを取得（1回取れたらキャッシュ） */
+    static String resolveShimatube() {
+        String b = shimatubeBackend;
+        if (b != null) return b;
+        java.net.HttpURLConnection c = null;
+        try {
+            c = (java.net.HttpURLConnection) new java.net.URL(
+                    "https://url-board.vercel.app/api/resolve/shimatube").openConnection();
+            c.setConnectTimeout(8000);
+            c.setReadTimeout(8000);
+            if (c.getResponseCode() != 200) return null;
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            try (java.io.InputStream in = c.getInputStream()) {
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+            }
+            org.json.JSONObject j = new org.json.JSONObject(bo.toString("UTF-8"));
+            String url = j.optString("url", "");
+            if (url.startsWith("http")) {
+                if (url.endsWith("/")) url = url.substring(0, url.length() - 1);
+                shimatubeBackend = url;
+                return url;
+            }
+        } catch (Throwable ignore) {
+        } finally {
+            if (c != null) c.disconnect();
+        }
+        return null;
+    }
+
+    /**
+     * YouTube動画をShimaTube(yt-dlpバックエンド)経由でダウンロード。
+     * バックエンドは /stream/<id>?dl=1 を application/octet-stream + Content-Disposition で返すので
+     * DownloadManagerがタイトル名で保存できる（サーバ側でmux済みのmp4）。
+     * title=null ならID名で保存する。resolve/enqueueはネットワークなので別スレッドで。
+     */
+    public static void downloadYoutube(final Activity act, final String videoId, final String title) {
+        Toast.makeText(act, "ShimaTubeでDL準備中…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            final String b = resolveShimatube();
+            act.runOnUiThread(() -> {
+                if (b == null) {
+                    Toast.makeText(act, "ShimaTubeバックエンドに接続できません", Toast.LENGTH_LONG).show();
+                    return;
+                }
+                try {
+                    String url = b + "/stream/" + videoId + "?dl=1";
+                    String base = (title != null && !title.trim().isEmpty())
+                            ? cleanTitle(title) : videoId;
+                    String fn = base + ".mp4";
+                    DownloadManager.Request r = new DownloadManager.Request(Uri.parse(url));
+                    r.setMimeType("video/mp4");
+                    String cookie = CookieManager.getInstance().getCookie(url);
+                    if (cookie != null) r.addRequestHeader("Cookie", cookie);
+                    r.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fn);
+                    r.setTitle(fn);
+                    r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE);
+                    ((DownloadManager) act.getSystemService(Context.DOWNLOAD_SERVICE)).enqueue(r);
+                    Toast.makeText(act, "DL開始: " + fn, Toast.LENGTH_SHORT).show();
+                } catch (Throwable e) {
+                    Toast.makeText(act, "DL失敗: " + e, Toast.LENGTH_SHORT).show();
+                }
+            });
+        }).start();
+    }
+
+    /** 動画タイトルからファイル名に使えない文字を除去し、末尾の「 - YouTube」を落とす */
+    private static String cleanTitle(String t) {
+        t = t.replaceAll("\\s*[-–]\\s*YouTube\\s*$", "");
+        t = t.replaceAll("[/\\\\\\r\\n\\t:*?\"<>|]", "_").trim();
+        if (t.length() > 120) t = t.substring(0, 120).trim();
+        return t.isEmpty() ? "youtube" : t;
+    }
+
     // ---- 通常ダウンロード（静的ヘルパ） ----
 
     static final String BLOB_IFACE = "__snifferBlob";
@@ -515,6 +627,12 @@ public class SnifferChrome extends WebChromeClient {
         final java.util.List<String> items = new java.util.ArrayList<>();
         final java.util.List<Runnable> actions = new java.util.ArrayList<>();
         boolean linkOk = link != null && (link.startsWith("http://") || link.startsWith("https://"));
+        // YouTube動画リンク(サムネ長押し等)なら先頭にDL項目を出す
+        final String vid = linkOk ? youtubeVideoId(link) : null;
+        if (vid != null) {
+            items.add("⬇ この動画をDL (ShimaTube)");
+            actions.add(() -> downloadYoutube(act, vid, null));
+        }
         if (linkOk && opener != null) {
             final String l = link;
             items.add("↗ 新しいタブで開く");

@@ -373,6 +373,9 @@ public class MainActivity extends Activity {
         Menu m = pm.getMenu();
         m.add(0, 2, 0, "⟳ 再読み込み");
         m.add(0, 12, 0, t.desktop ? "📱 モバイル版に戻す" : "🖥 PC版サイト");
+        // YouTube動画ページなら動画DL項目を出す
+        final String ytId = SnifferChrome.youtubeVideoId(t.web.getUrl());
+        if (ytId != null) m.add(0, 15, 0, "⬇ この動画をDL (ShimaTube)");
         boolean bm = db.isBookmarked(t.web.getUrl());
         m.add(0, 3, 0, bm ? "★ ブックマーク解除" : "☆ ブックマークに追加");
         m.add(0, 4, 0, "📑 ブックマーク");
@@ -416,6 +419,10 @@ public class MainActivity extends Activity {
                     return true;
                 case 13: showPwaList(); return true;
                 case 14: showPins(); return true;
+                case 15:
+                    if (ytId != null)
+                        SnifferChrome.downloadYoutube(this, ytId, t.web.getTitle());
+                    return true;
             }
             return false;
         });
@@ -1151,7 +1158,7 @@ public class MainActivity extends Activity {
     private void setupWeb(final Tab t) {
         // CDP制御チャネル: 外部LLMエージェントが devtools socket 経由でこのWebViewを駆動できる
         if (Build.VERSION.SDK_INT >= 19) WebView.setWebContentsDebuggingEnabled(true);
-        WebView web = new WebView(this);
+        final SnifferWebView web = new SnifferWebView(this); // バックグラウンド再生対応
         t.web = web;
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
@@ -1183,6 +1190,7 @@ public class MainActivity extends Activity {
         Media.track(web, new Media.PlayState() {
             @Override public void onPlaying(boolean playing) {
                 mediaPlaying = playing;
+                web.setKeepPlaying(playing); // 裏でもメディアを止めない(バックグラウンド再生)
                 runOnUiThread(MainActivity.this::syncPlaybackService);
             }
             @Override public void onVideoSize(int w, int h) {
