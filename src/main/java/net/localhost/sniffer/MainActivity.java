@@ -1224,6 +1224,10 @@ public class MainActivity extends Activity {
         // 証明書エラーで「続行」したホスト（タブ単位）と確認ダイアログ多重表示ガード
         final java.util.Set<String> sslOk = new java.util.HashSet<>();
         final boolean[] sslPrompting = {false};
+        // 直近のユーザー操作時刻。クリック→中間ページ→JSリダイレクトの連鎖では
+        // hasGesture()が2段目以降で落ちるため、猶予内の遷移は正規の続きとして通す
+        final long[] lastGestureMs = {0};
+        web.setOnTouchListener((v, ev) -> { lastGestureMs[0] = System.currentTimeMillis(); return false; });
         web.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
@@ -1246,11 +1250,13 @@ public class MainActivity extends Activity {
                     return openExternal(view, req.getUrl().toString(), req.hasGesture());
                 }
                 // ユーザーがリンク/フォームを操作したらキャプティブ素通しモードを解除
-                if (req.hasGesture()) t.captiveProbe = false;
+                if (req.hasGesture()) { t.captiveProbe = false; lastGestureMs[0] = System.currentTimeMillis(); }
                 // リダイレクトブロック: ユーザー操作なしの別サイトへのメインフレーム遷移を遮断。
                 // ただしWiFiログイン呼び出し中は、ポータルへの無操作リダイレクトを通す。
+                // 操作直後(猶予内)の遷移も、白紙の中間ページに取り残さないよう通す。
+                boolean recentGesture = System.currentTimeMillis() - lastGestureMs[0] < 5000;
                 if (ad.redirectBlockOn() && req.isForMainFrame()
-                        && !req.hasGesture() && !t.captiveProbe) {
+                        && !req.hasGesture() && !recentGesture && !t.captiveProbe) {
                     String curUrl = view.getUrl();
                     String from = curUrl != null
                             ? AdBlocker.site(android.net.Uri.parse(curUrl).getHost()) : "";

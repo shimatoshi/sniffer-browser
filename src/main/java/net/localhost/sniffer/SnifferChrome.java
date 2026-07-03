@@ -190,13 +190,37 @@ public class SnifferChrome extends WebChromeClient {
 
     @Override
     public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, Message resultMsg) {
-        // 非ジェスチャのポップアップ＝広告は無視（設定でオフにできる）
-        if (!isUserGesture && AdBlocker.get(act).popupBlockOn()) return false;
+        // 非ジェスチャのポップアップ＝広告。falseを返すとwindow.open()がnullになり
+        // サイトJSが「w.focus()」等で例外死→本命の遷移まで壊れて白画面になるため、
+        // 何もロードしないダミー窓を渡して黙って握り潰す
+        if (!isUserGesture && AdBlocker.get(act).popupBlockOn()) {
+            WebView dummy = new WebView(view.getContext());
+            dummy.setWebViewClient(new WebViewClient() {
+                @Override
+                public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) { return true; }
+                @SuppressWarnings("deprecation")
+                @Override
+                public boolean shouldOverrideUrlLoading(WebView v, String url) { return true; }
+            });
+            WebView.WebViewTransport tr = (WebView.WebViewTransport) resultMsg.obj;
+            tr.setWebView(dummy);
+            resultMsg.sendToTarget();
+            // opener側から見るとwindowが閉じただけになる。少し待ってから破棄
+            new android.os.Handler(android.os.Looper.getMainLooper())
+                    .postDelayed(dummy::destroy, 15000);
+            return true;
+        }
         // 仮WebViewでURLだけ受け取り、メインWebViewで開く（シングルウィンドウ運用）
         WebView temp = new WebView(view.getContext());
+        final boolean[] done = {false};
         temp.setWebViewClient(new WebViewClient() {
             // 注意: 未アタッチViewのpost()は実行されない(API24+)。Handlerで確実に破棄する
             private void consume(WebView v, String url) {
+                // window.open('about:blank')→後からlocationを入れるサイト対策:
+                // 初回のabout:blankをメインに流すと白画面になるので実URLを待つ
+                if (url == null || url.isEmpty() || "about:blank".equals(url)) return;
+                if (done[0]) return;
+                done[0] = true;
                 openUrl(url);
                 new android.os.Handler(android.os.Looper.getMainLooper()).post(v::destroy);
             }
@@ -215,6 +239,10 @@ public class SnifferChrome extends WebChromeClient {
         WebView.WebViewTransport t = (WebView.WebViewTransport) resultMsg.obj;
         t.setWebView(temp);
         resultMsg.sendToTarget();
+        // 実URLが来ないまま放置された仮窓（document.write型ポップアップ等）はリークするので回収
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+            if (!done[0]) { done[0] = true; temp.destroy(); }
+        }, 15000);
         return true;
     }
 
