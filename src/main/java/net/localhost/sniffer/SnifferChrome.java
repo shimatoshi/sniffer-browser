@@ -456,26 +456,30 @@ public class SnifferChrome extends WebChromeClient {
 
     /**
      * YouTube動画をShimaTube(yt-dlpバックエンド)経由でダウンロード。
-     * バックエンドは /stream/<id>?dl=1 を application/octet-stream + Content-Disposition で返すので
-     * DownloadManagerがタイトル名で保存できる（サーバ側でmux済みのmp4）。
-     * title=null ならID名で保存する。resolve/enqueueはネットワークなので別スレッドで。
+     * audioOnly=true なら format=audio で音声のみ(m4a)。
+     * title=null なら oEmbed でタイトルを取得して保存名にする（取れなければID名）。
+     * resolve/oEmbed/enqueueはネットワークなので別スレッドで。
      */
-    public static void downloadYoutube(final Activity act, final String videoId, final String title) {
+    public static void downloadYoutube(final Activity act, final String videoId,
+                                       final String title, final boolean audioOnly) {
         Toast.makeText(act, "ShimaTubeでDL準備中…", Toast.LENGTH_SHORT).show();
         new Thread(() -> {
             final String b = resolveShimatube();
+            final String t = (title != null && !title.trim().isEmpty())
+                    ? title : fetchYoutubeTitle(videoId);
             act.runOnUiThread(() -> {
                 if (b == null) {
                     Toast.makeText(act, "ShimaTubeバックエンドに接続できません", Toast.LENGTH_LONG).show();
                     return;
                 }
                 try {
-                    String url = b + "/stream/" + videoId + "?dl=1";
-                    String base = (title != null && !title.trim().isEmpty())
-                            ? cleanTitle(title) : videoId;
-                    String fn = base + ".mp4";
+                    String url = b + "/stream/" + videoId + "?dl=1"
+                            + (audioOnly ? "&format=audio" : "");
+                    String base = (t != null && !t.trim().isEmpty())
+                            ? cleanTitle(t) : videoId;
+                    String fn = base + (audioOnly ? ".m4a" : ".mp4");
                     DownloadManager.Request r = new DownloadManager.Request(Uri.parse(url));
-                    r.setMimeType("video/mp4");
+                    r.setMimeType(audioOnly ? "audio/mp4" : "video/mp4");
                     String cookie = CookieManager.getInstance().getCookie(url);
                     if (cookie != null) r.addRequestHeader("Cookie", cookie);
                     r.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fn);
@@ -488,6 +492,31 @@ public class SnifferChrome extends WebChromeClient {
                 }
             });
         }).start();
+    }
+
+    /** oEmbed(APIキー不要)で動画タイトルを取得。失敗なら null */
+    static String fetchYoutubeTitle(String videoId) {
+        java.net.HttpURLConnection c = null;
+        try {
+            c = (java.net.HttpURLConnection) new java.net.URL(
+                    "https://www.youtube.com/oembed?url=https%3A%2F%2Fyoutu.be%2F"
+                    + videoId + "&format=json").openConnection();
+            c.setConnectTimeout(8000);
+            c.setReadTimeout(8000);
+            if (c.getResponseCode() != 200) return null;
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            try (java.io.InputStream in = c.getInputStream()) {
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+            }
+            String t = new org.json.JSONObject(bo.toString("UTF-8")).optString("title", "");
+            return t.isEmpty() ? null : t;
+        } catch (Throwable ignore) {
+            return null;
+        } finally {
+            if (c != null) c.disconnect();
+        }
     }
 
     /** 動画タイトルからファイル名に使えない文字を除去し、末尾の「 - YouTube」を落とす */
@@ -661,7 +690,9 @@ public class SnifferChrome extends WebChromeClient {
         final String vid = linkOk ? youtubeVideoId(link) : null;
         if (vid != null) {
             items.add("⬇ この動画をDL (ShimaTube)");
-            actions.add(() -> downloadYoutube(act, vid, null));
+            actions.add(() -> downloadYoutube(act, vid, null, false));
+            items.add("♪ 音声のみDL (ShimaTube)");
+            actions.add(() -> downloadYoutube(act, vid, null, true));
         }
         if (linkOk && opener != null) {
             final String l = link;

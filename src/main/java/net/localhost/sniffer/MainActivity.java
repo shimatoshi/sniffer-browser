@@ -387,7 +387,10 @@ public class MainActivity extends Activity {
         m.add(0, 12, 0, t.desktop ? "📱 モバイル版に戻す" : "🖥 PC版サイト");
         // YouTube動画ページなら動画DL項目を出す
         final String ytId = SnifferChrome.youtubeVideoId(t.web.getUrl());
-        if (ytId != null) m.add(0, 15, 0, "⬇ この動画をDL (ShimaTube)");
+        if (ytId != null) {
+            m.add(0, 15, 0, "⬇ この動画をDL (ShimaTube)");
+            m.add(0, 16, 0, "♪ 音声のみDL (ShimaTube)");
+        }
         boolean bm = db.isBookmarked(t.web.getUrl());
         m.add(0, 3, 0, bm ? "★ ブックマーク解除" : "☆ ブックマークに追加");
         m.add(0, 4, 0, "📑 ブックマーク");
@@ -433,7 +436,11 @@ public class MainActivity extends Activity {
                 case 14: showPins(); return true;
                 case 15:
                     if (ytId != null)
-                        SnifferChrome.downloadYoutube(this, ytId, t.web.getTitle());
+                        SnifferChrome.downloadYoutube(this, ytId, t.web.getTitle(), false);
+                    return true;
+                case 16:
+                    if (ytId != null)
+                        SnifferChrome.downloadYoutube(this, ytId, t.web.getTitle(), true);
                     return true;
             }
             return false;
