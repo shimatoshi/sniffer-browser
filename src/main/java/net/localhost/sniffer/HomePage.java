@@ -1,6 +1,10 @@
 package net.localhost.sniffer;
 
+import android.content.Context;
+import android.util.Base64;
+
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
@@ -15,10 +19,11 @@ import java.util.regex.Pattern;
 /**
  * ブラウザホーム（gobie://home）。
  *
- * - 固定サイト(pins)をタイル表示し、開いた時に各サイトの新着記事を自動取得（オートスクレイプ）
- * - 取得: RSS/Atom直叩き → HTMLからautodiscovery → だめならアンカータグの見出しヒューリスティック
- * - 結果はメモリキャッシュ（10分）。キャッシュがあれば即描画→裏で更新→揃ったら再描画
- * - ページ内リンク gobie://unpin?id=N / gobie://refresh はMainActivityが拾う
+ * - 検索エンジンのロゴ＋検索バー＋背景画像のミニマルなスタートページ
+ *   （検索は gobie://search?q=... でMainActivityのgo()へ流す）
+ * - 背景画像は filesDir/home_bg.jpg（設定→ホーム画面で選択）。base64で埋め込む
+ * - PWA・固定サイトの一覧はホームから⋮メニューへ移動した
+ * - 固定サイトの新着オートスクレイプ(collectAll)は記事ウィジェット用に残す
  */
 public class HomePage {
 
@@ -40,114 +45,89 @@ public class HomePage {
 
     private static final Map<String, CacheEnt> cache = new ConcurrentHashMap<>();
 
-    /** ホームHTMLを生成。fetchingは「裏で取得中」表示を出すか */
-    public static String render(List<BrowserDb.Entry> pins, List<BrowserDb.Pwa> pwas, boolean fetching) {
+    /**
+     * ホームHTMLを生成。ロゴ＋検索バー＋背景画像のみのミニマル構成。
+     * 検索エンジンがGoogleならGoogle風4色ロゴ、他はエンジン名を表示。
+     */
+    public static String render(String bgDataUrl, String engineName) {
+        boolean hasBg = bgDataUrl != null && !bgDataUrl.isEmpty();
         StringBuilder b = new StringBuilder();
         b.append("<!DOCTYPE html><html><head><meta charset='utf-8'>")
                 .append("<meta name='viewport' content='width=device-width,initial-scale=1'>")
                 .append("<style>")
-                .append("body{background:#1a1a1a;color:#ddd;font-family:sans-serif;margin:0;padding:12px}")
-                .append("a{color:#8ab4f8;text-decoration:none}")
-                .append("h1{font-size:18px;margin:4px 0 12px}")
-                .append("h2{font-size:13px;color:#999;margin:4px 0 10px;font-weight:normal}")
-                .append(".st{font-size:12px;color:#888;margin-bottom:12px}")
-                .append(".card{background:#252525;border-radius:10px;padding:10px 12px;margin-bottom:12px}")
-                .append(".site{display:flex;align-items:center;justify-content:space-between}")
-                .append(".site a{font-size:15px;font-weight:bold;color:#fff}")
-                .append(".x{color:#777;font-size:13px;padding:2px 8px}")
-                .append("ul{list-style:none;margin:8px 0 0;padding:0}")
-                .append("li{margin:7px 0;font-size:13px;line-height:1.4}")
-                .append(".empty{color:#777;font-size:13px;margin-top:6px}")
-                // PWAグリッド
-                .append(".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr));")
-                .append("gap:6px 4px;margin:0 0 18px}")
-                .append(".pwa{display:flex;flex-direction:column;align-items:center;text-align:center;")
-                .append("padding:8px 2px;border-radius:12px;-webkit-tap-highlight-color:transparent;")
-                .append("-webkit-touch-callout:none;user-select:none}")
-                .append(".pwa:active{background:#333}")
-                .append(".pwa img{width:52px;height:52px;border-radius:14px;object-fit:cover;background:#333}")
-                .append(".pwa span{margin-top:6px;font-size:11px;color:#ccc;line-height:1.2;")
-                .append("max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}")
-                .append("</style></head><body>");
-        b.append("<h1>🏠 Gobie ホーム <a href='gobie://refresh' style='font-size:13px;font-weight:normal'>↻ 更新</a></h1>");
-        if (pwas != null && !pwas.isEmpty()) {
-            b.append("<h2>アプリ（長押しでメニュー）</h2><div class='grid'>");
-            for (BrowserDb.Pwa p : pwas) {
-                String src = (p.icon != null && !p.icon.isEmpty())
-                        ? "data:image/png;base64," + p.icon : "";
-                b.append("<a class='pwa' data-id='").append(p.id)
-                        .append("' href='gobie://pwa-open?id=").append(p.id).append("'>")
-                        .append("<img src='").append(src).append("' alt=''>")
-                        .append("<span>").append(esc(p.label())).append("</span></a>");
-            }
-            b.append("</div>");
+                .append("html,body{height:100%}")
+                .append("body{margin:0;font-family:sans-serif;background:#1a1a1a")
+                .append(hasBg ? ";background-image:url(" + bgDataUrl + ");"
+                        + "background-size:cover;background-position:center" : "")
+                .append("}")
+                .append(".wrap{min-height:100%;display:flex;flex-direction:column;")
+                .append("align-items:center;justify-content:center;padding:0 16px;")
+                .append("box-sizing:border-box;margin-top:-6vh}")
+                .append(".logo{font-size:52px;font-weight:bold;letter-spacing:-2px;")
+                .append("margin-bottom:26px;user-select:none")
+                .append(hasBg ? ";text-shadow:0 1px 8px rgba(0,0,0,.7)" : "")
+                .append("}")
+                .append(".logo span.w{color:#eee}")
+                .append("#q{width:100%;max-width:480px;box-sizing:border-box;")
+                .append("padding:13px 22px;font-size:16px;border:none;border-radius:26px;")
+                .append("background:rgba(255,255,255,.96);color:#111;outline:none;")
+                .append("box-shadow:0 2px 10px rgba(0,0,0,.4)}")
+                .append("form{width:100%;display:flex;justify-content:center}")
+                .append("</style></head><body><div class='wrap'>");
+        b.append("<div class='logo'>");
+        if ("Google".equals(engineName)) {
+            // Google風4色ロゴ
+            String[] cols = {"#4285F4", "#EA4335", "#FBBC05", "#4285F4", "#34A853", "#EA4335"};
+            String s = "Google";
+            for (int i = 0; i < s.length(); i++)
+                b.append("<span style='color:").append(cols[i]).append("'>")
+                        .append(s.charAt(i)).append("</span>");
+        } else {
+            b.append("<span class='w'>").append(esc(engineName)).append("</span>");
         }
-        if (fetching) b.append("<div class='st'>新着記事を取得中...</div>");
-        if (pins.isEmpty()) {
-            b.append("<div class='card'>固定サイトがまだ無い。<br>")
-                    .append("サイトを開いて ⋮メニュー →「🏠 ホームに固定」で追加すると、")
-                    .append("ここに新着記事が並ぶ。</div>");
-        }
-        for (BrowserDb.Entry p : pins) {
-            b.append("<div class='card'><div class='site'>")
-                    .append("<a href='").append(esc(p.url)).append("'>")
-                    .append(esc(p.label())).append("</a>")
-                    .append("<a class='x' href='gobie://unpin?id=").append(p.id).append("'>✕</a>")
-                    .append("</div>");
-            CacheEnt ce = cache.get(p.url);
-            if (ce == null || ce.arts.isEmpty()) {
-                b.append("<div class='empty'>").append(ce == null ? "（未取得）" : "（記事を検出できず）").append("</div>");
-            } else {
-                b.append("<ul>");
-                for (Article a : ce.arts)
-                    b.append("<li><a href='").append(esc(a.url)).append("'>")
-                            .append(esc(a.title)).append("</a></li>");
-                b.append("</ul>");
-            }
-            b.append("</div>");
-        }
-        // PWAタイルの長押し→メニュー（gobie://pwa-menu）。直後のclickは抑止。
-        // 長押しはWebViewがcontextmenuイベントを投げるのでそれを拾う（手製タイマーより堅牢）。
-        // contextmenu→メニュー、直後のclickは抑止。短タップのclickは通常通りPWA起動。
-        b.append("<script>(function(){")
-                .append("var longp=false;")
-                .append("document.querySelectorAll('.pwa').forEach(function(a){")
-                .append("a.addEventListener('contextmenu',function(e){e.preventDefault();longp=true;")
-                .append("if(navigator.vibrate)navigator.vibrate(20);")
-                .append("location.href='gobie://pwa-menu?id='+a.getAttribute('data-id');")
-                .append("setTimeout(function(){longp=false;},800);});")
-                .append("a.addEventListener('click',function(e){if(longp){e.preventDefault();longp=false;}});")
-                .append("});})();</script>");
-        b.append("</body></html>");
+        b.append("</div>");
+        b.append("<form id='f' action='#'>")
+                .append("<input id='q' type='search' placeholder='検索またはURL' ")
+                .append("autocomplete='off' autocapitalize='off'></form>");
+        b.append("</div><script>")
+                .append("document.getElementById('f').addEventListener('submit',function(e){")
+                .append("e.preventDefault();var v=document.getElementById('q').value.trim();")
+                .append("if(v)location.href='gobie://search?q='+encodeURIComponent(v);});")
+                .append("</script></body></html>");
         return b.toString();
     }
 
-    /** 期限切れ/未取得のピンがあるか（=裏で取得を回すべきか） */
-    public static boolean needsFetch(List<BrowserDb.Entry> pins, boolean force) {
-        long now = System.currentTimeMillis();
-        for (BrowserDb.Entry p : pins) {
-            CacheEnt ce = cache.get(p.url);
-            if (ce == null || force || now - ce.ts > TTL_MS) return true;
+    // ---- ホーム背景画像（filesDir/home_bg.jpg をbase64埋め込み、メモリキャッシュ） ----
+
+    private static volatile String bgCache;
+    private static volatile long bgMtime = -2; // -2=未読込
+
+    public static File bgFile(Context ctx) { return new File(ctx.getFilesDir(), "home_bg.jpg"); }
+
+    /** 背景画像のdata:URL。未設定ならnull。ファイル更新はmtimeで検知 */
+    public static String bgDataUrl(Context ctx) {
+        File f = bgFile(ctx);
+        long mt = f.exists() ? f.lastModified() : -1;
+        if (mt == bgMtime) return bgCache;
+        String v = null;
+        if (mt != -1) {
+            try {
+                byte[] buf = new byte[(int) f.length()];
+                try (java.io.DataInputStream in = new java.io.DataInputStream(
+                        new java.io.FileInputStream(f))) {
+                    in.readFully(buf);
+                }
+                v = "data:image/jpeg;base64," + Base64.encodeToString(buf, Base64.NO_WRAP);
+            } catch (Throwable e) {
+                v = null;
+            }
         }
-        return false;
+        bgCache = v;
+        bgMtime = mt;
+        return v;
     }
 
-    /** 全ピンの新着を取得（ブロッキング、ワーカースレッドで呼ぶ）。1件でも更新したらtrue */
-    public static boolean fetchAll(List<BrowserDb.Entry> pins, boolean force, String ua) {
-        long now = System.currentTimeMillis();
-        boolean updated = false;
-        for (BrowserDb.Entry p : pins) {
-            CacheEnt ce = cache.get(p.url);
-            if (ce != null && !force && now - ce.ts <= TTL_MS) continue;
-            try {
-                cache.put(p.url, new CacheEnt(fetchSite(p.url, ua)));
-            } catch (Throwable e) {
-                cache.put(p.url, new CacheEnt(new ArrayList<Article>()));
-            }
-            updated = true;
-        }
-        return updated;
-    }
+    public static void invalidateBg() { bgMtime = -2; bgCache = null; }
 
     /**
      * 全固定サイトの新着を取得し、サイトラベル付きの一本のリストにまとめて返す（記事ウィジェット用）。

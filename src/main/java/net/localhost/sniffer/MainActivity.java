@@ -377,9 +377,11 @@ public class MainActivity extends Activity {
         m.add(0, 3, 0, bm ? "★ ブックマーク解除" : "☆ ブックマークに追加");
         m.add(0, 4, 0, "📑 ブックマーク");
         m.add(0, 5, 0, "🕘 履歴");
+        m.add(0, 13, 0, "📱 アプリ（PWA）");
+        m.add(0, 14, 0, "📌 固定サイト");
         m.add(0, 11, 0, "📶 WiFiログイン");
-        m.add(0, 9, 0, "🏠 ホームに固定");
-        m.add(0, 6, 0, "📌 PWAとしてホームに追加");
+        m.add(0, 9, 0, "📌 固定サイトに追加");
+        m.add(0, 6, 0, "📱 PWAとしてホームに追加");
         m.add(0, 10, 0, "📦 オフライン");
         m.add(0, 8, 0, "📜 ユーザースクリプト");
         m.add(0, 7, 0, "⚙ 設定");
@@ -412,6 +414,8 @@ public class MainActivity extends Activity {
                     Toast.makeText(this, t.desktop ? "🖥 PC版で表示" : "📱 モバイル版で表示",
                             Toast.LENGTH_SHORT).show();
                     return true;
+                case 13: showPwaList(); return true;
+                case 14: showPins(); return true;
             }
             return false;
         });
@@ -433,53 +437,32 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "WiFiログイン画面を呼び出し中…", Toast.LENGTH_SHORT).show();
     }
 
-    // ---- ホーム（gobie://home、固定サイト＋新着オートスクレイプ） ----
+    // ---- ホーム（gobie://home、ロゴ＋検索バー＋背景画像） ----
 
     private void goHome(Tab t, boolean force) {
-        List<BrowserDb.Entry> pins = db.listPins();
-        List<BrowserDb.Pwa> pwas = db.listPwas();
-        boolean fetch = HomePage.needsFetch(pins, force);
-        t.web.loadDataWithBaseURL(HomePage.URL_HOME, HomePage.render(pins, pwas, fetch),
+        t.web.loadDataWithBaseURL(HomePage.URL_HOME,
+                HomePage.render(HomePage.bgDataUrl(this), ENGINES[searchEngineIndex()][0]),
                 "text/html", "utf-8", HomePage.URL_HOME);
         if (t == curTab()) urlBar.setText(HomePage.URL_HOME);
-        // 既存のピン留めPWAを台帳へ取り込み、増えていたらホームを描き直す
-        new Thread(() -> {
-            int before = pwas.size();
-            PwaInstaller.syncFromShortcuts(getApplicationContext());
-            List<BrowserDb.Pwa> after = db.listPwas();
-            if (after.size() != before) runOnUiThread(() -> rerenderHome());
-        }).start();
-        if (!fetch) return;
-        new Thread(() -> {
-            HomePage.fetchAll(pins, force, ua);
-            runOnUiThread(this::rerenderHome);
-        }).start();
     }
 
-    /** ホームを開いたままのタブだけ最新の固定サイト/PWAで再描画。 */
+    /** ホームを開いたままのタブを再描画（背景画像/検索エンジン変更後）。 */
     private void rerenderHome() {
         if (isFinishing() || isDestroyed()) return;
-        List<BrowserDb.Entry> pins = db.listPins();
-        List<BrowserDb.Pwa> pwas = db.listPwas();
         for (Tab x : tabs)
-            if (HomePage.URL_HOME.equals(x.web.getUrl()))
-                x.web.loadDataWithBaseURL(HomePage.URL_HOME,
-                        HomePage.render(pins, pwas, false),
-                        "text/html", "utf-8", HomePage.URL_HOME);
+            if (HomePage.URL_HOME.equals(x.web.getUrl())) goHome(x, false);
     }
 
-    /** ホーム内リンク gobie://unpin?id=N / gobie://refresh / gobie://pwa-open|pwa-menu?id=N */
+    /** ホーム内リンク gobie://search?q=... （旧ホームのpwa-open等も互換で残す） */
     private void handleGobie(Tab t, android.net.Uri u) {
         String host = u.getHost();
-        if ("unpin".equals(host)) {
-            try { db.removePin(Long.parseLong(u.getQueryParameter("id"))); } catch (Throwable ignore) {}
-            goHome(t, false);
-        } else if ("refresh".equals(host)) {
-            goHome(t, true);
+        if ("search".equals(host)) {
+            String q = u.getQueryParameter("q");
+            if (q != null && !q.trim().isEmpty()) go(q.trim());
         } else if ("pwa-open".equals(host)) {
             openPwa(pwaParam(u));
         } else if ("pwa-menu".equals(host)) {
-            showPwaItemMenu(t, pwaParam(u));
+            showPwaItemMenu(pwaParam(u));
         } else {
             goHome(t, false);
         }
@@ -505,10 +488,68 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** PWAタイル長押しメニュー: 開く / アップデート / 削除。 */
-    private void showPwaItemMenu(Tab t, BrowserDb.Pwa p) {
+    /** PWA一覧（⋮メニューから）。タップで起動、長押しで個別メニュー */
+    private void showPwaList() {
+        // ランチャー側で作られたピン留めPWAを台帳へ取り込んでから一覧を出す
+        new Thread(() -> {
+            PwaInstaller.syncFromShortcuts(getApplicationContext());
+            final List<BrowserDb.Pwa> pwas = db.listPwas();
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                if (pwas.isEmpty()) {
+                    Toast.makeText(this, "PWAなし（⋮→PWAとしてホームに追加）",
+                            Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                String[] items = new String[pwas.size()];
+                for (int i = 0; i < pwas.size(); i++) items[i] = pwas.get(i).label();
+                AlertDialog dlg = new AlertDialog.Builder(this)
+                        .setTitle("📱 アプリ（長押しでメニュー）")
+                        .setItems(items, (d, w) -> openPwa(pwas.get(w)))
+                        .setNegativeButton("閉じる", null)
+                        .create();
+                dlg.show();
+                dlg.getListView().setOnItemLongClickListener((av, v, pos, id) -> {
+                    dlg.dismiss();
+                    showPwaItemMenu(pwas.get(pos));
+                    return true;
+                });
+            });
+        }).start();
+    }
+
+    /** 固定サイト一覧（⋮メニューから）。タップで開く、長押しで解除 */
+    private void showPins() {
+        final List<BrowserDb.Entry> pins = db.listPins();
+        if (pins.isEmpty()) {
+            Toast.makeText(this, "固定サイトなし（⋮→固定サイトに追加）", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        AlertDialog dlg = new AlertDialog.Builder(this)
+                .setTitle("📌 固定サイト（長押しで解除）")
+                .setAdapter(entryAdapter(pins), (d, w) -> openInCurrent(pins.get(w).url))
+                .setNegativeButton("閉じる", null)
+                .create();
+        dlg.getListView().setOnItemLongClickListener((av, v, pos, id) -> {
+            BrowserDb.Entry e = pins.get(pos);
+            new AlertDialog.Builder(this)
+                    .setMessage("固定を解除する？\n" + e.label())
+                    .setPositiveButton("解除", (d2, w2) -> {
+                        db.removePin(e.id);
+                        dlg.dismiss();
+                        showPins();
+                    })
+                    .setNegativeButton("やめる", null)
+                    .show();
+            return true;
+        });
+        dlg.show();
+    }
+
+    /** PWA個別メニュー: 開く / アップデート / 削除。 */
+    private void showPwaItemMenu(BrowserDb.Pwa p) {
         if (p == null) return;
-        final String[] items = {"開く", "🔄 アップデート（キャッシュ全消し）", "🗑 ホームから削除"};
+        final String[] items = {"開く", "🔄 アップデート（キャッシュ全消し）", "🗑 削除"};
         new AlertDialog.Builder(this)
                 .setTitle(p.label())
                 .setItems(items, (d, w) -> {
@@ -528,9 +569,8 @@ public class MainActivity extends Activity {
                             break;
                         case 2:
                             db.removePwa(p.id);
-                            Toast.makeText(this, "ホームから削除（ランチャーのアイコンは手動で）",
+                            Toast.makeText(this, "削除（ランチャーのアイコンは手動で）",
                                     Toast.LENGTH_SHORT).show();
-                            goHome(t, false);
                             break;
                     }
                 })
@@ -605,18 +645,18 @@ public class MainActivity extends Activity {
         name.setText(t.web.getTitle());
         root.addView(name);
         final EditText url = new EditText(this);
-        url.setHint("URL（トップページに削ると新着取得が安定）");
+        url.setHint("URL（トップページに削ると記事ウィジェットの新着取得が安定）");
         url.setSingleLine(true);
         url.setText(u0);
         root.addView(url);
         new AlertDialog.Builder(this)
-                .setTitle("ホームに固定")
+                .setTitle("固定サイトに追加")
                 .setView(root)
                 .setPositiveButton("固定", (d, w) -> {
                     String u = url.getText().toString().trim();
                     if (u.isEmpty()) return;
                     db.addPin(u, name.getText().toString().trim());
-                    Toast.makeText(this, "🏠 固定した", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "📌 固定した（⋮→固定サイト）", Toast.LENGTH_SHORT).show();
                 })
                 .setNegativeButton("やめる", null)
                 .show();
@@ -625,16 +665,85 @@ public class MainActivity extends Activity {
     // ---- 設定（カテゴリ別） ----
 
     private void showSettings() {
-        final String[] cats = {"🔍 検索エンジン", "🛡 アドブロック", "📦 オフライン"};
+        final String[] cats = {"🔍 検索エンジン", "🛡 アドブロック", "🏠 ホーム画面", "📦 オフライン"};
         new AlertDialog.Builder(this)
                 .setTitle("⚙ 設定")
                 .setItems(cats, (d, w) -> {
                     if (w == 0) showSearchEngineSettings();
                     else if (w == 1) showAdblockSettings();
+                    else if (w == 2) showHomeSettings();
                     else showOfflineSettings();
                 })
                 .setNegativeButton("閉じる", null)
                 .show();
+    }
+
+    // ---- 設定: ホーム画面（背景画像） ----
+
+    private static final int REQ_BG = 73;
+
+    private void showHomeSettings() {
+        boolean hasBg = HomePage.bgFile(this).exists();
+        final String[] items = hasBg
+                ? new String[]{"🖼 背景画像を変更", "背景画像を削除"}
+                : new String[]{"🖼 背景画像を選ぶ"};
+        new AlertDialog.Builder(this)
+                .setTitle("🏠 ホーム画面")
+                .setItems(items, (d, w) -> {
+                    if (w == 0) {
+                        Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+                        i.setType("image/*");
+                        i.addCategory(Intent.CATEGORY_OPENABLE);
+                        try {
+                            startActivityForResult(Intent.createChooser(i, "ホーム背景画像"), REQ_BG);
+                        } catch (Throwable e) {
+                            Toast.makeText(this, "画像ピッカーを開けない: " + e, Toast.LENGTH_SHORT).show();
+                        }
+                    } else {
+                        HomePage.bgFile(this).delete();
+                        HomePage.invalidateBg();
+                        rerenderHome();
+                        Toast.makeText(this, "背景を削除した", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton("閉じる", null)
+                .show();
+    }
+
+    /** 選択画像を画面サイズ程度に縮小してJPEG保存 → ホーム背景に反映 */
+    private void importHomeBg(final android.net.Uri uri) {
+        new Thread(() -> {
+            try {
+                android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+                o.inJustDecodeBounds = true;
+                try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
+                    android.graphics.BitmapFactory.decodeStream(in, null, o);
+                }
+                int maxDim = 1440; // 端末画面より少し大きい程度に抑えてHTML埋め込みを軽くする
+                int sample = 1;
+                while (Math.max(o.outWidth, o.outHeight) / (sample * 2) >= maxDim) sample *= 2;
+                android.graphics.BitmapFactory.Options o2 = new android.graphics.BitmapFactory.Options();
+                o2.inSampleSize = sample;
+                android.graphics.Bitmap bm;
+                try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
+                    bm = android.graphics.BitmapFactory.decodeStream(in, null, o2);
+                }
+                if (bm == null) throw new IllegalStateException("decode失敗");
+                java.io.File out = HomePage.bgFile(this);
+                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(out)) {
+                    bm.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, fos);
+                }
+                bm.recycle();
+                HomePage.invalidateBg();
+                runOnUiThread(() -> {
+                    rerenderHome();
+                    Toast.makeText(this, "🖼 背景を設定した", Toast.LENGTH_SHORT).show();
+                });
+            } catch (Throwable e) {
+                runOnUiThread(() -> Toast.makeText(this,
+                        "背景の取り込み失敗: " + e, Toast.LENGTH_SHORT).show());
+            }
+        }).start();
     }
 
     // ---- 設定: 検索エンジン（デフォルトはGoogle、切替でDuckDuckGo/Bing） ----
@@ -648,6 +757,7 @@ public class MainActivity extends Activity {
                     getSharedPreferences("settings", MODE_PRIVATE)
                             .edit().putInt("searchEngine", w).apply();
                     Toast.makeText(this, "検索: " + names[w], Toast.LENGTH_SHORT).show();
+                    rerenderHome(); // ホームのロゴも切替える
                     d.dismiss();
                 })
                 .setNegativeButton("閉じる", null)
@@ -1319,6 +1429,12 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == REQ_BG) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null)
+                importHomeBg(data.getData());
+            super.onActivityResult(requestCode, resultCode, data);
+            return;
+        }
         // ファイルピッカーは開いたタブのchromeだけがfileCbを持つので全タブへ中継して問題ない
         for (Tab t : tabs) t.chrome.onFileResult(requestCode, resultCode, data);
         super.onActivityResult(requestCode, resultCode, data);
