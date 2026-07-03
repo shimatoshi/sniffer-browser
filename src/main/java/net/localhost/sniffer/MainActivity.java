@@ -71,6 +71,8 @@ public class MainActivity extends Activity {
         volatile boolean captiveProbe = false;
         // 外部アプリのリンクから開いたタブ。BACKで履歴が尽きたら呼び出し元アプリへ戻る。
         volatile boolean external = false;
+        // PC版サイト表示（デスクトップUA）中か。タブ単位で切替。
+        volatile boolean desktop = false;
     }
 
     private Tab curTab() { return (cur >= 0 && cur < tabs.size()) ? tabs.get(cur) : null; }
@@ -370,6 +372,7 @@ public class MainActivity extends Activity {
         PopupMenu pm = new PopupMenu(this, anchor);
         Menu m = pm.getMenu();
         m.add(0, 2, 0, "⟳ 再読み込み");
+        m.add(0, 12, 0, t.desktop ? "📱 モバイル版に戻す" : "🖥 PC版サイト");
         boolean bm = db.isBookmarked(t.web.getUrl());
         m.add(0, 3, 0, bm ? "★ ブックマーク解除" : "☆ ブックマークに追加");
         m.add(0, 4, 0, "📑 ブックマーク");
@@ -402,6 +405,13 @@ public class MainActivity extends Activity {
                 case 9: showPinDialog(t); return true;
                 case 10: showOffline(); return true;
                 case 11: openCaptivePortal(t); return true;
+                case 12:
+                    t.desktop = !t.desktop;
+                    SnifferChrome.applyUaMode(t.web.getSettings(), t.desktop);
+                    t.web.reload();
+                    Toast.makeText(this, t.desktop ? "🖥 PC版で表示" : "📱 モバイル版で表示",
+                            Toast.LENGTH_SHORT).show();
+                    return true;
             }
             return false;
         });

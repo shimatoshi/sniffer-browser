@@ -225,6 +225,29 @@ public class SnifferChrome extends WebChromeClient {
     }
 
     /**
+     * PC版サイト表示のUA切替。desktop=trueでデスクトップChrome相当のUAへ、
+     * falseでWebView既定に戻してからWebView識別子を落とす（=通常のモバイルUA）。
+     * Chromeのメジャーバージョンは実UAから引き継ぐのでWebView更新でもずれない。
+     */
+    public static void applyUaMode(android.webkit.WebSettings s, boolean desktop) {
+        if (desktop) {
+            String ua = s.getUserAgentString();
+            String major = "120";
+            if (ua != null) {
+                java.util.regex.Matcher m =
+                        java.util.regex.Pattern.compile("Chrome/(\\d+)").matcher(ua);
+                if (m.find()) major = m.group(1);
+            }
+            s.setUserAgentString("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + major
+                    + ".0.0.0 Safari/537.36");
+        } else {
+            s.setUserAgentString(null); // WebView既定へリセット
+            applyChromeUa(s);
+        }
+    }
+
+    /**
      * 「埋め込みWebViewであること」を隠してデスクトップ/モバイルChrome相当に見せる偽装スクリプト。
      * claude.ai のOAuth同意画面は、埋め込みWebViewを検出すると「承認」ボタンを
      * disabled のままにする（= Claude Codeログインの承認ボタンがグレーアウトして
@@ -243,15 +266,18 @@ public class SnifferChrome extends WebChromeClient {
             + "loadTimes:function(){return {requestTime:Date.now()/1000,startLoadTime:Date.now()/1000,commitLoadTime:Date.now()/1000,finishLoadTime:Date.now()/1000};},"
             + "csi:function(){return {onloadT:Date.now(),pageT:Date.now(),startE:Date.now(),tran:15};}};}"
             // 2) navigator.userAgentData を Google Chrome 相当へ
+            //    （PC版サイト表示=デスクトップUAの時は Windows/非mobile を申告）
             + "var ua=navigator.userAgent||'';"
+            + "var isMob=/Android/i.test(ua);"
             + "var m=ua.match(/Chrome\\/(\\d+)(\\.[\\d.]+)?/);"
             + "var major=m?m[1]:'149';"
             + "var full=m?(m[1]+(m[2]||'.0.0.0')):'149.0.0.0';"
+            + "var plat=isMob?'Android':'Windows';"
             + "var brands=[{brand:'Chromium',version:major},{brand:'Google Chrome',version:major},{brand:'Not)A;Brand',version:'24'}];"
             + "var fvl=[{brand:'Chromium',version:full},{brand:'Google Chrome',version:full},{brand:'Not)A;Brand',version:'24.0.0.0'}];"
-            + "var d={brands:brands,mobile:true,platform:'Android',"
-            + "getHighEntropyValues:function(h){return Promise.resolve({architecture:'arm',bitness:'64',brands:brands,fullVersionList:fvl,mobile:true,model:'',platform:'Android',platformVersion:'10.0.0',uaFullVersion:full,wow64:false});},"
-            + "toJSON:function(){return {brands:brands,mobile:true,platform:'Android'};}};"
+            + "var d={brands:brands,mobile:isMob,platform:plat,"
+            + "getHighEntropyValues:function(h){return Promise.resolve({architecture:isMob?'arm':'x86',bitness:'64',brands:brands,fullVersionList:fvl,mobile:isMob,model:'',platform:plat,platformVersion:isMob?'10.0.0':'15.0.0',uaFullVersion:full,wow64:false});},"
+            + "toJSON:function(){return {brands:brands,mobile:isMob,platform:plat};}};"
             + "Object.defineProperty(Navigator.prototype,'userAgentData',{get:function(){return d;},configurable:true});"
             + "}catch(e){}})();";
 
