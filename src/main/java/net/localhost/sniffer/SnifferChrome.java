@@ -58,6 +58,7 @@ public class SnifferChrome extends WebChromeClient {
     @Override
     public void onShowCustomView(View view, CustomViewCallback callback) {
         if (customView != null) { callback.onCustomViewHidden(); return; }
+        Dbg.log(act, "fullscreen enter: " + view.getClass().getSimpleName());
         customView = view;
         customCb = callback;
         FrameLayout decor = (FrameLayout) act.getWindow().getDecorView();
@@ -85,6 +86,7 @@ public class SnifferChrome extends WebChromeClient {
     /** BACKキーから呼ぶ。全画面中だったらtrue（処理済み） */
     public boolean exitFullscreen() {
         if (customView == null) return false;
+        Dbg.log(act, "fullscreen exit (inPip=" + (Build.VERSION.SDK_INT >= 24 && act.isInPictureInPictureMode()) + ")");
         FrameLayout decor = (FrameLayout) act.getWindow().getDecorView();
         decor.removeView(customView);
         decor.setSystemUiVisibility(savedUiVisibility);
@@ -92,6 +94,11 @@ public class SnifferChrome extends WebChromeClient {
         customView = null;
         if (customCb != null) { try { customCb.onCustomViewHidden(); } catch (Throwable ignore) {} }
         customCb = null;
+        // PiP中の強制全画面解除後、動画がページ内に戻るので擬似全画面を当て直す
+        if (Build.VERSION.SDK_INT >= 24 && act.isInPictureInPictureMode())
+            mainWeb.postDelayed(new Runnable() {
+                @Override public void run() { Media.setPipLayout(mainWeb, true); }
+            }, 200);
         return true;
     }
 
@@ -354,6 +361,29 @@ public class SnifferChrome extends WebChromeClient {
     public static void injectYoutubeAdblock(WebView web, String url) {
         if (!AdBlocker.get(web.getContext()).adblockOn()) return;
         if (isYoutube(url)) web.evaluateJavascript(YOUTUBE_ADBLOCK_JS, null);
+    }
+
+    // www.youtube.com(desktop)を狭い画面で開くと #primary 等の min-width:426.7px に
+    // UseWideViewPortが引っ張られてレイアウトビューポートが438pxに広がり、
+    // 画面(393px)から45pxはみ出す。狭幅時だけmin-widthを打ち消す。
+    private static final String YOUTUBE_NARROW_JS =
+            "(function(){try{" +
+            "if(location.hostname!=='www.youtube.com')return;" +
+            "if(document.getElementById('__snifYtNarrow'))return;" +
+            "var st=document.createElement('style');st.id='__snifYtNarrow';" +
+            "st.textContent='@media(max-width:600px){" +
+            "#primary,#player-container-outer,#teaser-carousel{min-width:0!important;}" +
+            "ytd-watch-flexy{--ytd-watch-flexy-min-player-width:0px!important;}}';" +
+            "(document.head||document.documentElement).appendChild(st);" +
+            // minimum-scale=1: コンテンツがはみ出た時のズームアウトフィット
+            // (pageScale<1でfixed要素の基準幅が広がり左右見切れ)を禁止する
+            "var m=document.querySelector('meta[name=viewport]');" +
+            "if(m&&m.content.indexOf('minimum-scale')<0)m.content+=',minimum-scale=1';" +
+            "}catch(e){}})();";
+
+    /** onPageStarted/Finishedから呼ぶ。YouTube(www)の狭幅レイアウトはみ出しを修正 */
+    public static void injectYoutubeNarrowFix(WebView web, String url) {
+        if (isYoutube(url)) web.evaluateJavascript(YOUTUBE_NARROW_JS, null);
     }
 
     // ---- YouTube動画ダウンロード（ShimaTube応用） ----

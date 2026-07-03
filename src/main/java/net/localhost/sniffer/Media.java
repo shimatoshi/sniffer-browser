@@ -60,6 +60,58 @@ public final class Media {
             "['play','playing','pause','ended','emptied','loadedmetadata','resize']" +
             ".forEach(function(e){document.addEventListener(e,rep,true);});})();";
 
+    // ---- PiP中の擬似全画面 ----
+    // WebViewはPiP突入直後にHTML5全画面(customView)を強制解除してしまい、
+    // 小窓にページ全体が縮小表示される。そこでPiP中は再生中のvideo要素を
+    // CSSでビューポート全面に固定し、動画だけが見えるようにする。
+    // (classベース: サイトJSがstyle属性を書き換えても効き続ける)
+
+    private static final String PIP_ON_JS =
+            "(function(){try{" +
+            "var vs=[].slice.call(document.querySelectorAll('video')).filter(function(m){return m.videoWidth>0;});" +
+            "if(!vs.length)return 'novideo';" +
+            "var b=vs.filter(function(m){return !m.paused&&!m.ended;})[0]||vs[0];" +
+            "var st=document.getElementById('__snifPipCss');" +
+            "if(!st){st=document.createElement('style');st.id='__snifPipCss';" +
+            "st.textContent='video.__snifPip{position:fixed!important;left:0!important;top:0!important;" +
+            "width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;" +
+            "min-width:0!important;min-height:0!important;margin:0!important;padding:0!important;" +
+            "z-index:2147483647!important;background:#000!important;object-fit:contain!important;" +
+            "transform:none!important;visibility:visible!important;display:block!important;}" +
+            // 祖先にtransform等があるとposition:fixedの基準がずれるため打ち消す
+            ".__snifPipA{transform:none!important;filter:none!important;perspective:none!important;" +
+            "contain:none!important;will-change:auto!important;backdrop-filter:none!important;}" +
+            "html,body{overflow:hidden!important;background:#000!important;}';" +
+            "document.documentElement.appendChild(st);}" +
+            "if(window.__snifPipV&&window.__snifPipV!==b)window.__snifPipV.classList.remove('__snifPip');" +
+            "window.__snifPipV=b;b.classList.add('__snifPip');" +
+            "window.__snifPipA=window.__snifPipA||[];" +
+            "for(var p=b.parentElement;p&&p!==document.documentElement;p=p.parentElement){" +
+            "p.classList.add('__snifPipA');window.__snifPipA.push(p);}" +
+            "var cs=getComputedStyle(b),r=b.getBoundingClientRect();" +
+            "return 'ok n='+vs.length+' pos='+cs.position+' z='+cs.zIndex+" +
+            "' rect='+Math.round(r.left)+','+Math.round(r.top)+','+Math.round(r.width)+'x'+Math.round(r.height)+" +
+            "' vp='+window.innerWidth+'x'+window.innerHeight;" +
+            "}catch(e){return 'err:'+e;}})();";
+
+    private static final String PIP_OFF_JS =
+            "(function(){try{" +
+            "if(window.__snifPipV){window.__snifPipV.classList.remove('__snifPip');delete window.__snifPipV;}" +
+            "(window.__snifPipA||[]).forEach(function(p){try{p.classList.remove('__snifPipA');}catch(e){}});" +
+            "window.__snifPipA=[];" +
+            "var st=document.getElementById('__snifPipCss');if(st)st.remove();" +
+            "return 'off';}catch(e){return 'err:'+e;}})();";
+
+    /** PiP出入りで呼ぶ。on=trueで動画をビューポート全面固定、falseで復元 */
+    public static void setPipLayout(final WebView web, final boolean on) {
+        if (web == null) return;
+        web.evaluateJavascript(on ? PIP_ON_JS : PIP_OFF_JS, new android.webkit.ValueCallback<String>() {
+            @Override public void onReceiveValue(String v) {
+                Dbg.log(web.getContext(), "PiP css(" + (on ? "on" : "off") + "): " + v);
+            }
+        });
+    }
+
     // ---- ネイティブPiP ----
 
     /**

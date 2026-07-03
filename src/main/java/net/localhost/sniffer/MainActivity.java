@@ -222,7 +222,9 @@ public class MainActivity extends Activity {
     public void onUserLeaveHint() {
         super.onUserLeaveHint();
         Tab t = curTab();
-        if (t != null && t.chrome.isInFullscreen())
+        boolean fs = t != null && t.chrome.isInFullscreen();
+        Dbg.log(this, "PiP userLeaveHint: fullscreen=" + fs + " playing=" + mediaPlaying + " v=" + videoW + "x" + videoH);
+        if (fs)
             Media.enterPip(this, videoW, videoH);
     }
 
@@ -230,6 +232,16 @@ public class MainActivity extends Activity {
     public void onPictureInPictureModeChanged(boolean isInPip, android.content.res.Configuration cfg) {
         super.onPictureInPictureModeChanged(isInPip, cfg);
         inPip = isInPip;
+        Dbg.log(this, "PiP changed: inPip=" + isInPip);
+        // PiP小窓にはWebView(全画面動画)だけを出す。URLバー等が残るとミニチュアの
+        // ブラウザ画面になってしまうため、PiP中はブラウザUIを畳む
+        int vis = isInPip ? View.GONE : View.VISIBLE;
+        findViewById(R.id.topBar).setVisibility(vis);
+        findViewById(R.id.bottomBar).setVisibility(vis);
+        if (isInPip) progress.setVisibility(View.GONE);
+        // WebViewはPiP突入直後にHTML5全画面を強制解除するため、CSSで動画を全面固定する
+        Tab t = curTab();
+        if (t != null) Media.setPipLayout(t.web, isInPip);
         syncPlaybackService();
     }
 
@@ -1253,6 +1265,7 @@ public class MainActivity extends Activity {
                 SnifferChrome.injectClientHints(view); // userAgentDataのWebView申告をChrome偽装(OAuth承認ボタン無効化回避)
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
                 SnifferChrome.injectYoutubeAdblock(view, url); // YouTube動画内広告の除去(早期注入でJSON.parseフック)
+                SnifferChrome.injectYoutubeNarrowFix(view, url); // www狭幅のはみ出し修正
                 ad.injectCosmetics(view, url); // 要素隠しCSSを早期注入（描画前に広告枠を潰す）
                 for (String js : UserScripts.get(MainActivity.this).forUrl(url, true))
                     view.evaluateJavascript(js, null);
@@ -1262,6 +1275,7 @@ public class MainActivity extends Activity {
                 t.pageUrl = url;
                 t.pageTitle = view.getTitle();
                 Media.injectTracker(view);
+                SnifferChrome.injectYoutubeNarrowFix(view, url); // started時は旧documentで消えるため再注入
                 ad.injectCosmetics(view, url); // 動的挿入対策に読み込み完了時も上書き注入
                 db.addHistory(url, t.pageTitle);
                 OfflineStore.get(MainActivity.this).autoSave(view, db, url, t.pageTitle);

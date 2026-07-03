@@ -34,6 +34,30 @@ public class PwaActivity extends Activity {
     private boolean inPip = false;
     private boolean started = false;
 
+    // YouTube: www起点PWAがモバイルUAでm.youtube.comへ飛ばされるのを差し戻す用
+    private int ytRewrites = 0;
+    private long ytRewriteAt = 0;
+
+    /**
+     * www.youtube.com起点のPWAで m.youtube.com へ飛ばされたら www へ書き戻したURLを返す。
+     * m.youtube.comのプレイヤーは裏に回ると強制pause＆全画面解除でPiP/バックグラウンド再生
+     * 不能のため、wwwのプレイヤーに固定する。app=desktopを付けるとモバイルUAでも
+     * mへ飛ばされず(302も502も回避)wwwプレイヤーが確定する。
+     */
+    private String unMobileYoutube(String url) {
+        if (!"www.youtube.com".equalsIgnoreCase(homeHost)) return null;
+        try {
+            if (!"m.youtube.com".equalsIgnoreCase(Uri.parse(url).getHost())) return null;
+            return withDesktopParam(url.replaceFirst("//m\\.youtube\\.com", "//www.youtube.com"));
+        } catch (Throwable ignore) { return null; }
+    }
+
+    /** YouTube URLに app=desktop を付与（既にあればそのまま） */
+    private static String withDesktopParam(String url) {
+        if (url.contains("app=desktop")) return url;
+        return url + (url.contains("?") ? "&" : "?") + "app=desktop";
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -45,6 +69,8 @@ public class PwaActivity extends Activity {
 
         try { homeHost = Uri.parse(url).getHost(); } catch (Throwable ignore) {}
         if (homeHost == null) homeHost = "";
+        // YouTube www起点: app=desktopでwwwプレイヤー固定(PiP/バックグラウンド再生可能な方)
+        if ("www.youtube.com".equalsIgnoreCase(homeHost)) url = withDesktopParam(url);
         pageUrl = url;
 
         web = new SnifferWebView(this); // バックグラウンド再生対応
@@ -68,8 +94,11 @@ public class PwaActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
-        s.setLoadWithOverviewMode(true);
-        s.setUseWideViewPort(true);
+        // wide viewport/overview無効: PWAはviewport meta持ち前提。有効だとYouTube www等で
+        // 読み込み中に一瞬広がったコンテンツへoverviewがズームアウトしたまま固着し
+        // (pageScale 0.897)、position:fixed要素の基準幅が438pxになって左右が見切れる
+        s.setLoadWithOverviewMode(false);
+        s.setUseWideViewPort(false);
         s.setSupportMultipleWindows(true); // window.open/target=_blank をonCreateWindowで受ける
         if (Build.VERSION.SDK_INT >= 21)
             s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
@@ -113,6 +142,9 @@ public class PwaActivity extends Activity {
                     try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (Throwable ignore) {}
                     return true; // 未対応スキームでWebViewをERR_UNKNOWN_URL_SCHEMEにしない
                 }
+                // YouTube: m.youtube.comへのJS遷移をwwwへ差し戻す
+                String w = unMobileYoutube(u.toString());
+                if (w != null) { view.loadUrl(w); return true; }
                 // http(s)はスコープ内外を問わずPWA内WebViewで開く。スコープ外を外部ブラウザへ
                 // 蹴り出すと別タスクで真っ白になりPWAに戻れない(別オリジンのbackend/動画CDNで頻発)。
                 // 添付ファイルDLはDownloadListenerが拾い、遷移はキャンセルされPWAが保持される。
@@ -120,10 +152,25 @@ public class PwaActivity extends Activity {
             }
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap f) {
+                // YouTube: サーバー302でmへ飛ばされた場合もwwwへ差し戻す(ループ保険つき)
+                String w = unMobileYoutube(url);
+                if (w != null) {
+                    long now = System.currentTimeMillis();
+                    if (now - ytRewriteAt > 10000) ytRewrites = 0;
+                    ytRewriteAt = now;
+                    if (++ytRewrites <= 3) {
+                        Dbg.log(PwaActivity.this, "PWA yt guard: " + url + " -> www (try " + ytRewrites + ")");
+                        view.stopLoading();
+                        view.loadUrl(w);
+                        return;
+                    }
+                    Dbg.log(PwaActivity.this, "PWA yt guard: give up, stay on m");
+                }
                 pageUrl = url;
                 SnifferChrome.injectClientHints(view); // userAgentDataのWebView申告をChrome偽装(OAuth承認ボタン無効化回避)
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
                 SnifferChrome.injectYoutubeAdblock(view, url); // YouTube動画内広告の除去(YouTube PWA対応)
+                SnifferChrome.injectYoutubeNarrowFix(view, url); // www狭幅のはみ出し修正
                 AdBlocker.get(PwaActivity.this).injectCosmetics(view, url); // 要素隠し早期注入
                 for (String js : UserScripts.get(PwaActivity.this).forUrl(url, true))
                     view.evaluateJavascript(js, null);
@@ -133,6 +180,7 @@ public class PwaActivity extends Activity {
                 pageUrl = url;
                 pageTitle = view.getTitle();
                 Media.injectTracker(view);
+                SnifferChrome.injectYoutubeNarrowFix(view, url); // started時は旧documentで消えるため再注入
                 AdBlocker.get(PwaActivity.this).injectCosmetics(view, url); // 動的挿入対策の上書き注入
                 for (String js : UserScripts.get(PwaActivity.this).forUrl(url, false))
                     view.evaluateJavascript(js, null);
@@ -182,6 +230,8 @@ public class PwaActivity extends Activity {
     public void onPictureInPictureModeChanged(boolean isInPip, android.content.res.Configuration cfg) {
         super.onPictureInPictureModeChanged(isInPip, cfg);
         inPip = isInPip;
+        // WebViewはPiP突入直後にHTML5全画面を強制解除するため、CSSで動画を全面固定する
+        Media.setPipLayout(web, isInPip);
         // PiP中はプロセスが生きているので前面サービスは不要。抜けたら再判定。
         syncPlaybackService();
     }
