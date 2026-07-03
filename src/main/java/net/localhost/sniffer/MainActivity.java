@@ -639,12 +639,14 @@ public class MainActivity extends Activity {
     private void showAdblockSettings() {
         final String[] names = {
                 "広告ブロック",
+                "要素隠し（広告枠をCSSで非表示）",
                 "ポップアップブロック（無操作のwindow.open遮断）",
                 "リダイレクトブロック（無操作の別サイト遷移遮断）"};
-        final String[] keys = {"adblock", "popupBlock", "redirectBlock"};
-        final boolean[] st = {ad.adblockOn(), ad.popupBlockOn(), ad.redirectBlockOn()};
+        final String[] keys = {"adblock", "cosmetic", "popupBlock", "redirectBlock"};
+        final boolean[] st = {ad.adblockOn(), ad.cosmeticOn(), ad.popupBlockOn(), ad.redirectBlockOn()};
         new AlertDialog.Builder(this)
-                .setTitle("アドブロック（ルール " + ad.ruleCount() + "件）")
+                .setTitle("アドブロック（ドメイン" + ad.ruleCount()
+                        + "件・要素隠し" + ad.cosmeticCount() + "件）")
                 .setMultiChoiceItems(names, st, (d, w, checked) -> ad.set(keys[w], checked))
                 .setPositiveButton("閉じる", null)
                 .setNeutralButton("カスタムフィルター", (d, w) -> showFilters())
@@ -736,12 +738,12 @@ public class MainActivity extends Activity {
     }
 
     private void updateFilterList() {
-        Toast.makeText(this, "280blockerリストを取得中...", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "フィルターリストを取得中...（5ソース・数MB）", Toast.LENGTH_SHORT).show();
         new Thread(() -> {
             try {
-                final int n = ad.update();
+                final String msg = ad.update();
                 runOnUiThread(() -> Toast.makeText(this,
-                        "フィルター更新OK: " + n + "件", Toast.LENGTH_LONG).show());
+                        "フィルター更新OK: " + msg, Toast.LENGTH_LONG).show());
             } catch (Throwable e) {
                 runOnUiThread(() -> Toast.makeText(this,
                         "更新失敗: " + e.getMessage(), Toast.LENGTH_LONG).show());
@@ -1112,6 +1114,7 @@ public class MainActivity extends Activity {
                 if (t == curTab()) runOnUiThread(() -> urlBar.setText(url));
                 SnifferChrome.injectClientHints(view); // userAgentDataのWebView申告をChrome偽装(OAuth承認ボタン無効化回避)
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
+                ad.injectCosmetics(view, url); // 要素隠しCSSを早期注入（描画前に広告枠を潰す）
                 for (String js : UserScripts.get(MainActivity.this).forUrl(url, true))
                     view.evaluateJavascript(js, null);
             }
@@ -1120,6 +1123,7 @@ public class MainActivity extends Activity {
                 t.pageUrl = url;
                 t.pageTitle = view.getTitle();
                 Media.injectTracker(view);
+                ad.injectCosmetics(view, url); // 動的挿入対策に読み込み完了時も上書き注入
                 db.addHistory(url, t.pageTitle);
                 OfflineStore.get(MainActivity.this).autoSave(view, db, url, t.pageTitle);
                 for (String js : UserScripts.get(MainActivity.this).forUrl(url, false))
