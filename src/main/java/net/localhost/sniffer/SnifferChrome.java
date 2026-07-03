@@ -327,21 +327,32 @@ public class SnifferChrome extends WebChromeClient {
     }
 
     /**
-     * PC版サイトのページズーム（Chromeの Ctrl+± 相当）。
-     * viewport metaの幅を 980*100/percent に上書きすると、サイトは狭い幅でレイアウトされ
-     * WebViewが画面幅まで拡大表示する＝横スクロール無しで全体が大きくなる。
-     * useWideViewPort=true（PC版表示）が前提。document差し替えで消えるので
+     * ページズーム（Chromeの Ctrl+± 相当）。ページの種類で方式を自動で使い分ける:
+     *  - viewport metaを持たないページ（PC幅980pxレイアウト。PC版UAかどうかは関係ない。
+     *    GmailのデスクトップUIをモバイルUAで開いた場合も含む）
+     *    → viewport幅を 980*100/percent に上書き。サイトは狭い幅でレイアウトされ
+     *      WebViewが画面幅まで拡大表示する＝横スクロール無しで全体が大きくなる。
+     *  - viewport metaを持つレスポンシブページ → 幅上書きはレイアウトを壊すのでtextZoomで文字拡大。
+     * useWideViewPort=true が前提。document差し替えで消えるので
      * onPageStarted/onPageFinished の両方から呼ぶこと。
      */
-    public static void injectDesktopZoom(WebView web, int percent) {
+    public static void applyPageZoom(WebView web, int percent) {
         if (percent <= 0) return;
         int w = Math.max(320, Math.round(98000f / percent));
         web.evaluateJavascript("(function(){try{"
                 + "var m=document.querySelector('meta[name=viewport]');"
+                + "if(m&&!m.__snifferZoom)return 'responsive';" // サイト自前のviewport=レスポンシブ
                 + "if(!m){m=document.createElement('meta');m.setAttribute('name','viewport');"
                 + "(document.head||document.documentElement).appendChild(m);}"
-                + "m.setAttribute('content','width=" + w + "');"
-                + "}catch(e){}})();", null);
+                + "m.__snifferZoom=1;m.setAttribute('content','width=" + w + "');return 'wide';"
+                + "}catch(e){return ''}})();",
+                v -> {
+                    // レスポンシブページだけtextZoom、PC幅ページはviewport側に任せて等倍へ戻す
+                    int tz = (v != null && v.contains("responsive")) ? percent : 100;
+                    try {
+                        if (web.getSettings().getTextZoom() != tz) web.getSettings().setTextZoom(tz);
+                    } catch (Throwable ignore) {}
+                });
     }
 
     // ---- YouTube広告ブロック ----

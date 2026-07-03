@@ -431,9 +431,7 @@ public class MainActivity extends Activity {
                 case 12:
                     t.desktop = !t.desktop;
                     SnifferChrome.applyUaMode(t.web.getSettings(), t.desktop);
-                    // ズームの適用方式が変わる（PC版=viewport幅/モバイル=textZoom）ので付け替え
-                    t.web.getSettings().setTextZoom(t.desktop ? 100 : t.zoom);
-                    t.web.reload();
+                    t.web.reload(); // ズームはロードフックのapplyPageZoomがページ種別で付け替える
                     Toast.makeText(this, t.desktop ? "🖥 PC版で表示" : "📱 モバイル版で表示",
                             Toast.LENGTH_SHORT).show();
                     return true;
@@ -980,8 +978,9 @@ public class MainActivity extends Activity {
                 .setTitle("🔍 ページズーム")
                 .setSingleChoiceItems(labels, checked, (d, w) -> {
                     t.zoom = levels[w];
-                    if (t.desktop) SnifferChrome.injectDesktopZoom(t.web, t.zoom); // 即時反映(リロード不要)
-                    else t.web.getSettings().setTextZoom(t.zoom);
+                    SnifferChrome.applyPageZoom(t.web, t.zoom);
+                    // PC幅ページはviewport幅変更後の再フィットが要るのでリロードで確定させる
+                    t.web.reload();
                     d.dismiss();
                 })
                 .setNegativeButton("閉じる", null)
@@ -1308,7 +1307,7 @@ public class MainActivity extends Activity {
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
                 SnifferChrome.injectYoutubeAdblock(view, url); // YouTube動画内広告の除去(早期注入でJSON.parseフック)
                 SnifferChrome.injectYoutubeNarrowFix(view, url); // www狭幅のはみ出し修正
-                if (t.desktop && t.zoom != 100) SnifferChrome.injectDesktopZoom(view, t.zoom);
+                if (t.zoom != 100) SnifferChrome.applyPageZoom(view, t.zoom);
                 ad.injectCosmetics(view, url); // 要素隠しCSSを早期注入（描画前に広告枠を潰す）
                 for (String js : UserScripts.get(MainActivity.this).forUrl(url, true))
                     view.evaluateJavascript(js, null);
@@ -1319,7 +1318,7 @@ public class MainActivity extends Activity {
                 t.pageTitle = view.getTitle();
                 Media.injectTracker(view);
                 SnifferChrome.injectYoutubeNarrowFix(view, url); // started時は旧documentで消えるため再注入
-                if (t.desktop && t.zoom != 100) SnifferChrome.injectDesktopZoom(view, t.zoom);
+                if (t.zoom != 100) SnifferChrome.applyPageZoom(view, t.zoom);
                 ad.injectCosmetics(view, url); // 動的挿入対策に読み込み完了時も上書き注入
                 db.addHistory(url, t.pageTitle);
                 OfflineStore.get(MainActivity.this).autoSave(view, db, url, t.pageTitle);

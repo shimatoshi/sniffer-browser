@@ -105,8 +105,9 @@ public class PwaActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
-        if (desktop) {
-            // PC版PWA: viewport metaが無い前提なのでwide viewport+ピンチズームを有効化
+        if (desktop || zoom != 100) {
+            // PC版PWA/ズーム指定PWA: 980px幅レイアウトやviewport幅上書き(applyPageZoom)を
+            // 効かせるためwide viewport+ピンチズームを有効化
             s.setLoadWithOverviewMode(true);
             s.setUseWideViewPort(true);
             s.setBuiltInZoomControls(true);
@@ -123,7 +124,7 @@ public class PwaActivity extends Activity {
             s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         if (desktop) SnifferChrome.applyUaMode(s, true); // 言語切替等のリロードでもPC版に留める
         else SnifferChrome.applyChromeUa(s);
-        if (!desktop && zoom != 100) s.setTextZoom(zoom); // PC版のズームはロード時のviewport幅注入で行う
+        // ズームはロードフックのapplyPageZoomがページ種別(レスポンシブ/PC幅)で適用方式を決める
         SnifferChrome.applyGeolocation(this, s);
         ua = s.getUserAgentString();
 
@@ -192,7 +193,7 @@ public class PwaActivity extends Activity {
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
                 SnifferChrome.injectYoutubeAdblock(view, url); // YouTube動画内広告の除去(YouTube PWA対応)
                 SnifferChrome.injectYoutubeNarrowFix(view, url); // www狭幅のはみ出し修正
-                if (desktop && zoom != 100) SnifferChrome.injectDesktopZoom(view, zoom);
+                if (zoom != 100) SnifferChrome.applyPageZoom(view, zoom);
                 AdBlocker.get(PwaActivity.this).injectCosmetics(view, url); // 要素隠し早期注入
                 for (String js : UserScripts.get(PwaActivity.this).forUrl(url, true))
                     view.evaluateJavascript(js, null);
@@ -203,7 +204,7 @@ public class PwaActivity extends Activity {
                 pageTitle = view.getTitle();
                 Media.injectTracker(view);
                 SnifferChrome.injectYoutubeNarrowFix(view, url); // started時は旧documentで消えるため再注入
-                if (desktop && zoom != 100) SnifferChrome.injectDesktopZoom(view, zoom);
+                if (zoom != 100) SnifferChrome.applyPageZoom(view, zoom);
                 AdBlocker.get(PwaActivity.this).injectCosmetics(view, url); // 動的挿入対策の上書き注入
                 for (String js : UserScripts.get(PwaActivity.this).forUrl(url, false))
                     view.evaluateJavascript(js, null);
