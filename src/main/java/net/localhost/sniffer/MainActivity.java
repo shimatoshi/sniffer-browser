@@ -69,6 +69,8 @@ public class MainActivity extends Activity {
         volatile String pendingUrl = null;
         // WiFiログイン(キャプティブポータル)呼び出し中。リダイレクトブロックを一時的に素通しさせる。
         volatile boolean captiveProbe = false;
+        // 外部アプリのリンクから開いたタブ。BACKで履歴が尽きたら呼び出し元アプリへ戻る。
+        volatile boolean external = false;
     }
 
     private Tab curTab() { return (cur >= 0 && cur < tabs.size()) ? tabs.get(cur) : null; }
@@ -133,7 +135,7 @@ public class MainActivity extends Activity {
 
         Intent it = getIntent();
         if (it != null && it.getData() != null) {
-            createTab(it.getData().toString(), true);
+            createTab(it.getData().toString(), true).external = true;
         } else if (tabs.isEmpty()) {
             createTab(HOME, true);
         } else {
@@ -165,7 +167,7 @@ public class MainActivity extends Activity {
         super.onNewIntent(intent);
         if (intent == null) return;
         if (intent.getData() != null)
-            createTab(intent.getData().toString(), true);
+            createTab(intent.getData().toString(), true).external = true;
         else if (ACTION_FOCUS_URL.equals(intent.getAction()))
             focusUrlBar();
         else if (ACTION_SEARCH.equals(intent.getAction())) {
@@ -1327,6 +1329,16 @@ public class MainActivity extends Activity {
             if (t != null) {
                 if (t.chrome.exitFullscreen()) return true;
                 if (t.web.canGoBack()) { t.web.goBack(); return true; }
+                if (t.external) {
+                    // 外部アプリから開いたタブ: 履歴が尽きたらタブを閉じて呼び出し元アプリへ戻る。
+                    // タブ閉じの連鎖に入るとアプリへ帰れないので、ここで明示的に抜ける。
+                    t.external = false;
+                    boolean root = isTaskRoot();
+                    closeTab(cur); // セッションに外部リンクを残さない（空なら新ホームタブが立つ）
+                    if (root) moveTaskToBack(true); // 自タスク起動: ブラウザは生かしたまま裏へ
+                    else finish();                 // 呼び出し元タスク上に居る: 閉じて戻す
+                    return true;
+                }
                 if (tabs.size() > 1) { closeTab(cur); return true; }
             }
         }
