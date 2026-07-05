@@ -154,7 +154,12 @@ public class PwaActivity extends Activity {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
                 WebResourceResponse block = AdBlocker.get(PwaActivity.this).shouldBlock(req.getUrl());
-                if (block != null) return block;
+                if (block != null) {
+                    // メインフレームの空レス化は白画面になるので説明ページを返す
+                    return req.isForMainFrame()
+                            ? AdBlocker.get(PwaActivity.this).blockedPage(req.getUrl().getHost())
+                            : block;
+                }
                 Hits.sniff(req, pageUrl, pageTitle, ua);
                 return null;
             }

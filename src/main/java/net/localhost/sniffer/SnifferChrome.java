@@ -220,6 +220,15 @@ public class SnifferChrome extends WebChromeClient {
                 // 初回のabout:blankをメインに流すと白画面になるので実URLを待つ
                 if (url == null || url.isEmpty() || "about:blank".equals(url)) return;
                 if (done[0]) return;
+                // ブロック対象ドメインの新規窓はメインWebViewへ流さず握り潰す
+                // （流すとshouldInterceptRequestの空レス化で白画面になる）
+                if (AdBlocker.get(act).shouldBlock(android.net.Uri.parse(url)) != null) {
+                    done[0] = true;
+                    Toast.makeText(act, "ポップアップをブロック: "
+                            + android.net.Uri.parse(url).getHost(), Toast.LENGTH_SHORT).show();
+                    new android.os.Handler(android.os.Looper.getMainLooper()).post(v::destroy);
+                    return;
+                }
                 // リダイレクトブロックON時の強化: ジェスチャ有りポップアンダー対策。
                 // クリックハイジャックはユーザーのタップに便乗してwindow.open()するため
                 // isUserGestureでは弾けない。開き先が「元ページのサイト」でも

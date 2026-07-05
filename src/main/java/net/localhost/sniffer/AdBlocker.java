@@ -147,6 +147,25 @@ public class AdBlocker {
                 new ByteArrayInputStream(new byte[0]));
     }
 
+    /**
+     * メインフレームがブロック対象だった時の説明ページ。
+     * サブリソースと同じ空レスを返すとページ全体が真っ白になり
+     * 「壊れた」ように見えるため、こちらを返す。
+     */
+    public WebResourceResponse blockedPage(String host) {
+        Log.d("AdBlock", "block main-frame " + host);
+        String html = "<html><head><meta charset=utf-8>"
+                + "<meta name=viewport content='width=device-width'></head>"
+                + "<body style='background:#202124;color:#9aa0a6;font-family:sans-serif;margin:0;"
+                + "display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh'>"
+                + "<div style='font-size:15px'>広告ドメインをブロックしました</div>"
+                + "<div style='font-size:12px;margin-top:8px'>" + host + "</div>"
+                + "<a href='javascript:history.back()' style='color:#8ab4f8;margin-top:24px'>← 戻る</a>"
+                + "</body></html>";
+        return new WebResourceResponse("text/html", "utf-8",
+                new ByteArrayInputStream(html.getBytes()));
+    }
+
     /** eTLD+1近似（co.jp等の属性型ドメインは3ラベル）。リダイレクトブロックの同一サイト判定用 */
     public static String site(String host) {
         if (host == null) return "";
@@ -363,12 +382,28 @@ public class AdBlocker {
         }
     }
 
+    /**
+     * ||domain^$オプション のうち「ドメイン全域ブロック」と等価に扱って安全なもの。
+     * EasyList/AdGuardの広告サーバー節は $third-party 付きが大半で、これを捨てると
+     * アダルト系広告網（exosrv/tsyndicate等）がごっそり漏れる。
+     * $script/$image は「そのドメインの特定リソース型だけブロック」の意図なので
+     * ドメイン全域に広げると共用CDNを巻き込む。$popup はURL短縮系が多く同様に除外。
+     */
+    private static final Set<String> SAFE_OPTS = new HashSet<>(Arrays.asList(
+            "third-party", "3p", "all", "doc", "document"));
+
     /** hosts形式/素のドメイン列挙/ABPの||domain^ の3対応で1行をドメインに正規化 */
     static String parseDomain(String line) {
-        // ABP: ||example.com^ （パス・オプション付きは誤爆するので丸ごとドメインには採らない）
+        // ABP: ||example.com^ / ||example.com^$third-party 等
+        // （パス付き・SAFE_OPTS外のオプション付きは誤爆するので採らない）
         if (line.startsWith("||")) {
             int caret = line.indexOf('^');
-            if (caret < 0 || caret != line.length() - 1) return null;
+            if (caret < 0) return null;
+            if (caret != line.length() - 1) {
+                if (line.charAt(caret + 1) != '$') return null;
+                for (String o : line.substring(caret + 2).split(","))
+                    if (!SAFE_OPTS.contains(o.trim().toLowerCase(Locale.ROOT))) return null;
+            }
             String h = line.substring(2, caret).toLowerCase(Locale.ROOT);
             return validDomain(h) ? h : null;
         }

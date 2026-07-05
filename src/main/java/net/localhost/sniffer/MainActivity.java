@@ -1262,7 +1262,13 @@ public class MainActivity extends Activity {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
                 WebResourceResponse block = ad.shouldBlock(req.getUrl());
-                if (block != null) return block;
+                if (block != null) {
+                    // メインフレームを空レスにすると白画面になる。通常は
+                    // shouldOverrideUrlLoadingで遷移ごと止まるので、ここに来るのは
+                    // 302連鎖の着地等。説明ページを返して「壊れた」を防ぐ
+                    return req.isForMainFrame()
+                            ? ad.blockedPage(req.getUrl().getHost()) : block;
+                }
                 Hits.sniff(req, t.pageUrl, t.pageTitle, ua);
                 return null; // 通常ロードを妨げない
             }
@@ -1278,6 +1284,15 @@ public class MainActivity extends Activity {
                 String scheme = req.getUrl().getScheme();
                 if (scheme != null && !isWebScheme(scheme)) {
                     return openExternal(view, req.getUrl().toString(), req.hasGesture());
+                }
+                // 広告ドメインへのページ遷移そのもの（クリックハイジャック等）は
+                // ロード後に空レス化するのでなくナビゲーション自体を止めて
+                // 現ページに留まる（空レス化＝白画面の主因だった）
+                if (req.isForMainFrame() && ad.shouldBlock(req.getUrl()) != null) {
+                    Toast.makeText(MainActivity.this,
+                            "広告ドメインをブロック: " + req.getUrl().getHost(),
+                            Toast.LENGTH_SHORT).show();
+                    return true;
                 }
                 // ユーザーがリンク/フォームを操作したらキャプティブ素通しモードを解除
                 if (req.hasGesture()) { t.captiveProbe = false; }
@@ -1295,8 +1310,13 @@ public class MainActivity extends Activity {
                             ? AdBlocker.site(android.net.Uri.parse(curUrl).getHost()) : "";
                     String to = AdBlocker.site(req.getUrl().getHost());
                     String clicked = ClickTracker.recentClickHref(view);
-                    // null=JS報告なし: JS未動作ページを壊さないよう旧来のタッチ猶予で判定
-                    boolean allow = clicked != null ? !clicked.isEmpty()
+                    // null=JS報告なし: JS未動作ページを壊さないよう旧来のタッチ猶予で判定。
+                    // リンククリック済みでも、飛び先がクリックしたリンクのサイトと
+                    // 一致しなければタップ便乗のハイジャック遷移として遮断する
+                    // （旧判定「リンクをクリックしてれば何処でも許可」が広告素通りの穴だった。
+                    //   サーバー302連鎖は上のisServerRedirectで既に通している）
+                    boolean allow = clicked != null
+                            ? !clicked.isEmpty() && to.equals(ClickTracker.clickedSite(view))
                             : (req.hasGesture()
                                || System.currentTimeMillis() - lastGestureMs[0] < 5000);
                     // fromが空（file://等）でも別サイトへの遷移は同様に判定する
