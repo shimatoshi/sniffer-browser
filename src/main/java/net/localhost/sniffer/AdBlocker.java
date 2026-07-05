@@ -143,7 +143,11 @@ public class AdBlocker {
 
     private WebResourceResponse empty(String why) {
         Log.d("AdBlock", "block " + why);
-        return new WebResourceResponse("text/plain", "utf-8",
+        // 200+空ボディだと動画プレイヤー系が「取得成功・中身不正」扱いで
+        // 即リトライを無限に繰り返しページ全体が重くなる（doppiocdnで実測
+        // 148req/10秒）。403にしてクライアント側に諦めさせる
+        return new WebResourceResponse("text/plain", "utf-8", 403, "Blocked",
+                Collections.<String, String>emptyMap(),
                 new ByteArrayInputStream(new byte[0]));
     }
 
