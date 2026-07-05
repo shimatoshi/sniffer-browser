@@ -79,7 +79,20 @@ public class AdBlocker {
             "i-mobile.co.jp", "adingo.jp", "fluct.jp", "impact-ad.jp",
             "microad.jp", "nend.net", "zucks.net", "gmossp-sp.jp",
             "socdm.com", "logly.co.jp", "deqwas.net",
+            // アダルト系カムウィジェット/ポップアンダー網（missav実地調査 2026-07-05）。
+            // ウィジェットのiframe文書自体を落とす=中のHLSプレイヤーが起動せず
+            // 配信CDN(doppiocdn等)への無限リトライも発生しなくなる
+            "mavrtracktor.com", "myavlive.com", "snaptrckr.fun", "mayzaent.com",
+            "twinrdengine.com", "rmishe.com", "diffusedpassionquaking.com",
     };
+
+    /**
+     * URL部分一致の内蔵シード（カスタムフィルターと同じ扱い）。
+     * missav等は広告ポップアップを自サイトの /pop?url=<広告URL> 経由で開くため、
+     * 飛び先ドメインでは判定できない（同一サイト→サーバー302で広告網へ）。
+     * 第一者リダイレクタはパスのパターンで塞ぐしかない。
+     */
+    private static final String[] PATTERN_SEED = { "/pop?url=" };
 
     /** 巨大リスト対策: 汎用(全サイト適用)セレクタの上限。超過分は捨てる */
     private static final int MAX_GENERIC = 15000;
@@ -299,6 +312,7 @@ public class AdBlocker {
         try (BrowserDb db = new BrowserDb(app)) {
             c = db.listFilterPatterns();
         }
+        c.addAll(Arrays.asList(PATTERN_SEED));
 
         // 汎用セレクタ: グローバル除外(#@#)を差し引き、上限で切ってCSSを事前連結
         List<String> gen = new ArrayList<>();
