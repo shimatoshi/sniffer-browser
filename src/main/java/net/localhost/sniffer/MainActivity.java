@@ -84,6 +84,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        net.localhost.debugnote.DebugNote.attach(this, "sniffer-browser");
 
         webContainer = findViewById(R.id.webContainer);
         webContainer.setOnRefreshListener(() -> {
@@ -1252,10 +1253,11 @@ public class MainActivity extends Activity {
         // 証明書エラーで「続行」したホスト（タブ単位）と確認ダイアログ多重表示ガード
         final java.util.Set<String> sslOk = new java.util.HashSet<>();
         final boolean[] sslPrompting = {false};
-        // 直近のユーザー操作時刻。クリック→中間ページ→JSリダイレクトの連鎖では
-        // hasGesture()が2段目以降で落ちるため、猶予内の遷移は正規の続きとして通す
+        // 直近のネイティブタッチ時刻。ClickTrackerのJSが未動作なページでの
+        // フォールバック判定（旧来のジェスチャ猶予）にのみ使う
         final long[] lastGestureMs = {0};
         web.setOnTouchListener((v, ev) -> { lastGestureMs[0] = System.currentTimeMillis(); return false; });
+        ClickTracker.install(web); // クリック地点がリンクか否かの記録（リダイレクトブロック用）
         web.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
@@ -1278,19 +1280,27 @@ public class MainActivity extends Activity {
                     return openExternal(view, req.getUrl().toString(), req.hasGesture());
                 }
                 // ユーザーがリンク/フォームを操作したらキャプティブ素通しモードを解除
-                if (req.hasGesture()) { t.captiveProbe = false; lastGestureMs[0] = System.currentTimeMillis(); }
-                // リダイレクトブロック: ユーザー操作なしの別サイトへのメインフレーム遷移を遮断。
-                // ただしWiFiログイン呼び出し中は、ポータルへの無操作リダイレクトを通す。
-                // 操作直後(猶予内)の遷移も、白紙の中間ページに取り残さないよう通す。
-                boolean recentGesture = System.currentTimeMillis() - lastGestureMs[0] < 5000;
+                if (req.hasGesture()) { t.captiveProbe = false; }
+                // リダイレクトブロック: リンク/フォーム以外を起点とする別サイトへの
+                // メインフレーム遷移を遮断。hasGesture()は全面オーバーレイの
+                // クリックハイジャックでもtrueになるため判定に使わない。
+                // ClickTrackerの記録: リンククリック→中間ページ→JSリダイレクトの連鎖は
+                // 猶予内なら正規の続きとして通す。サーバー302は開始時点で判定済みなので通す。
+                // WiFiログイン呼び出し中はポータルへの無操作リダイレクトを通す。
+                boolean isServerRedirect = Build.VERSION.SDK_INT >= 24 && req.isRedirect();
                 if (ad.redirectBlockOn() && req.isForMainFrame()
-                        && !req.hasGesture() && !recentGesture && !t.captiveProbe) {
+                        && !isServerRedirect && !t.captiveProbe) {
                     String curUrl = view.getUrl();
                     String from = curUrl != null
                             ? AdBlocker.site(android.net.Uri.parse(curUrl).getHost()) : "";
                     String to = AdBlocker.site(req.getUrl().getHost());
-                    // fromが空（file://等）でも別サイトへの無操作遷移は遮断する
-                    if (!from.equals(to)) {
+                    String clicked = ClickTracker.recentClickHref(view);
+                    // null=JS報告なし: JS未動作ページを壊さないよう旧来のタッチ猶予で判定
+                    boolean allow = clicked != null ? !clicked.isEmpty()
+                            : (req.hasGesture()
+                               || System.currentTimeMillis() - lastGestureMs[0] < 5000);
+                    // fromが空（file://等）でも別サイトへの遷移は同様に判定する
+                    if (!from.equals(to) && !allow) {
                         Toast.makeText(MainActivity.this,
                                 "リダイレクトをブロック: " + req.getUrl().getHost()
                                         + "\n（⋮→設定で解除可）", Toast.LENGTH_SHORT).show();
@@ -1305,6 +1315,7 @@ public class MainActivity extends Activity {
                 if (t == curTab()) runOnUiThread(() -> { urlBar.setText(url); updateDlBtn(); });
                 SnifferChrome.injectClientHints(view); // userAgentDataのWebView申告をChrome偽装(OAuth承認ボタン無効化回避)
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
+                ClickTracker.inject(view); // クリック地点記録（リダイレクトブロック判定用）
                 SnifferChrome.injectYoutubeAdblock(view, url); // YouTube動画内広告の除去(早期注入でJSON.parseフック)
                 SnifferChrome.injectYoutubeNarrowFix(view, url); // www狭幅のはみ出し修正
                 if (t.zoom != 100) SnifferChrome.applyPageZoom(view, t.zoom);
@@ -1317,6 +1328,7 @@ public class MainActivity extends Activity {
                 t.pageUrl = url;
                 t.pageTitle = view.getTitle();
                 Media.injectTracker(view);
+                ClickTracker.inject(view); // started時に注入失敗したページの保険
                 SnifferChrome.injectYoutubeNarrowFix(view, url); // started時は旧documentで消えるため再注入
                 if (t.zoom != 100) SnifferChrome.applyPageZoom(view, t.zoom);
                 ad.injectCosmetics(view, url); // 動的挿入対策に読み込み完了時も上書き注入

@@ -93,6 +93,7 @@ public class PwaActivity extends Activity {
         if (title == null || title.isEmpty()) title = homeHost;
         setTaskDescription(new ActivityManager.TaskDescription(title, null, color));
         getWindow().setStatusBarColor(color);
+        net.localhost.debugnote.DebugNote.attach(this, "pwa-" + title);
 
         web.loadUrl(url);
     }
@@ -147,6 +148,8 @@ public class PwaActivity extends Activity {
             }
         });
 
+        ClickTracker.install(web); // ポップアップ遮断判定(SnifferChrome)がクリック記録を参照する
+
         web.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
@@ -191,6 +194,7 @@ public class PwaActivity extends Activity {
                 pageUrl = url;
                 SnifferChrome.injectClientHints(view); // userAgentDataのWebView申告をChrome偽装(OAuth承認ボタン無効化回避)
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
+                ClickTracker.inject(view); // クリック地点記録（ポップアップ遮断判定用）
                 SnifferChrome.injectYoutubeAdblock(view, url); // YouTube動画内広告の除去(YouTube PWA対応)
                 SnifferChrome.injectYoutubeNarrowFix(view, url); // www狭幅のはみ出し修正
                 if (zoom != 100) SnifferChrome.applyPageZoom(view, zoom);

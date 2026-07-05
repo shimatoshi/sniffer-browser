@@ -220,6 +220,22 @@ public class SnifferChrome extends WebChromeClient {
                 // 初回のabout:blankをメインに流すと白画面になるので実URLを待つ
                 if (url == null || url.isEmpty() || "about:blank".equals(url)) return;
                 if (done[0]) return;
+                // リダイレクトブロックON時の強化: ジェスチャ有りポップアンダー対策。
+                // クリックハイジャックはユーザーのタップに便乗してwindow.open()するため
+                // isUserGestureでは弾けない。開き先が「元ページのサイト」でも
+                // 「実際にクリックされたリンクの飛び先サイト」でもなければ広告と判断。
+                if (AdBlocker.get(act).redirectBlockOn()) {
+                    String to = AdBlocker.site(android.net.Uri.parse(url).getHost());
+                    String opener = view.getUrl() != null
+                            ? AdBlocker.site(android.net.Uri.parse(view.getUrl()).getHost()) : "";
+                    if (!to.equals(opener) && !to.equals(ClickTracker.clickedSite(view))) {
+                        done[0] = true;
+                        Toast.makeText(act, "ポップアップをブロック: "
+                                + android.net.Uri.parse(url).getHost(), Toast.LENGTH_SHORT).show();
+                        new android.os.Handler(android.os.Looper.getMainLooper()).post(v::destroy);
+                        return;
+                    }
+                }
                 done[0] = true;
                 openUrl(url);
                 new android.os.Handler(android.os.Looper.getMainLooper()).post(v::destroy);
