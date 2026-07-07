@@ -13,6 +13,7 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.webkit.CookieManager;
@@ -32,8 +33,8 @@ public class PwaActivity extends Activity {
 
     private SnifferWebView web;
     private SnifferChrome chrome;
-    private LinearLayout navBar; // scope外ブラウジング時だけ出す「戻る」バー
-    private TextView barHost;
+    private FrameLayout browseOverlay; // window.open時に重ねる「枠付き別WebView」
+    private SnifferWebView overlayWeb;
     private String homeHost = "";
     private volatile String pageUrl = "";
     private volatile String pageTitle = "";
@@ -94,7 +95,7 @@ public class PwaActivity extends Activity {
         pageUrl = url;
 
         web = new SnifferWebView(this); // バックグラウンド再生対応
-        setContentView(buildRoot()); // 戻るバー(既定GONE) + web
+        setContentView(web);
         setupWeb();
 
         // recents上で独立アプリらしく見せる
@@ -206,7 +207,6 @@ public class PwaActivity extends Activity {
                     Dbg.log(PwaActivity.this, "PWA yt guard: give up, stay on m");
                 }
                 pageUrl = url;
-                updateBar(url); // scope外なら戻るバーを出す
                 SnifferChrome.injectClientHints(view); // userAgentDataのWebView申告をChrome偽装(OAuth承認ボタン無効化回避)
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
                 ClickTracker.inject(view); // クリック地点記録（ポップアップ遮断判定用）
@@ -220,7 +220,6 @@ public class PwaActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 pageUrl = url;
-                updateBar(url); // 遷移確定時にもバー状態を再判定
                 pageTitle = view.getTitle();
                 Media.injectTracker(view);
                 SnifferChrome.injectYoutubeNarrowFix(view, url); // started時は旧documentで消えるため再注入
@@ -236,14 +235,14 @@ public class PwaActivity extends Activity {
                 pageTitle = title;
             }
             @Override protected void openUrl(String url) {
-                // window.open/target=_blank。非Webスキームのみ外部アプリへ、http(s)はPWA内で開く
+                // window.open/target=_blank。非Webスキームは外部アプリへ、http(s)は枠付きオーバーレイで開く
                 Uri u = null;
                 try { u = Uri.parse(url); } catch (Throwable ignore) {}
                 if (u != null && !isWeb(u)) {
                     try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (Throwable ignore) {}
                     return;
                 }
-                super.openUrl(url);
+                openBrowseOverlay(url); // PWAを保持したまま別WebViewを重ねる
             }
         };
         web.setWebChromeClient(chrome);
@@ -257,53 +256,115 @@ public class PwaActivity extends Activity {
     private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density + .5f); }
 
     /**
-     * 縦LinearLayout = [戻るバー(既定GONE)] + [web(重み1)]。
-     * PWAのホームhostから別hostへ出た(=ブラウジング開始)ときだけバーを出し、いつでも戻れるようにする。
+     * window.open/target=_blank を「枠付きの別WebView」を重ねて開く。
+     * 下のPWAはそのまま保持され、✕/BACKでいつでも元の画面へ戻れる。
+     * ネイティブWebViewはiframeでないのでX-Frame-Options無関係にどのサイトも表示できる。
      */
-    private View buildRoot() {
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
+    private void openBrowseOverlay(String url) {
+        if (browseOverlay != null) { overlayWeb.loadUrl(url); return; } // 既に開いていれば遷移
 
-        navBar = new LinearLayout(this);
-        navBar.setOrientation(LinearLayout.HORIZONTAL);
-        navBar.setGravity(Gravity.CENTER_VERTICAL);
-        navBar.setPadding(dp(4), dp(5), dp(10), dp(5));
-        navBar.setBackgroundColor(0xFF1E2025); // カード色
-        navBar.setVisibility(View.GONE);
+        FrameLayout overlay = new FrameLayout(this);
+        overlay.setBackgroundColor(0xFF14151A);
+        overlay.setClickable(true); // 下のPWAへのタップ貫通を防ぐ
 
-        Button back = new Button(this);
-        back.setText("‹ 戻る");
-        back.setAllCaps(false);
-        back.setTextColor(0xFFE23B2E); // スカーレット
-        back.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        back.setBackgroundColor(0x00000000);
-        back.setPadding(dp(10), dp(4), dp(10), dp(4));
-        back.setOnClickListener(v -> { if (web != null && web.canGoBack()) web.goBack(); });
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
 
-        barHost = new TextView(this);
-        barHost.setTextColor(0xFF9A9EA8);
-        barHost.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        barHost.setSingleLine(true);
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setBackgroundColor(0xFF1E2025);
+        bar.setPadding(dp(8), dp(4), dp(4), dp(4));
+
+        final TextView host = new TextView(this);
+        host.setTextColor(0xFF9A9EA8);
+        host.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        host.setSingleLine(true);
+        try { host.setText(Uri.parse(url).getHost()); } catch (Throwable ignore) {}
+
+        Button close = new Button(this);
+        close.setText("✕ 閉じる");
+        close.setAllCaps(false);
+        close.setTextColor(0xFFE23B2E);
+        close.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        close.setBackgroundColor(0x00000000);
+        close.setOnClickListener(v -> closeBrowseOverlay());
+
         LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        hp.leftMargin = dp(4);
+        bar.addView(host, hp);
+        bar.addView(close, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        navBar.addView(back, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        navBar.addView(barHost, hp);
+        overlayWeb = new SnifferWebView(this);
+        setupOverlayWeb(overlayWeb, host);
 
-        root.addView(navBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        root.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-        return root;
+        col.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        col.addView(overlayWeb, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        overlay.addView(col, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        ((FrameLayout) getWindow().getDecorView()).addView(overlay,
+                new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        browseOverlay = overlay;
+        overlayWeb.loadUrl(url);
     }
 
-    /** 現在URLのhostがホームと違えば(=scope外)戻るバーを表示。ホームに戻れば隠す。 */
-    private void updateBar(String url) {
-        if (navBar == null) return;
-        String host = "";
-        try { host = Uri.parse(url).getHost(); } catch (Throwable ignore) {}
-        if (host == null) host = "";
-        boolean offScope = !host.isEmpty() && !host.equalsIgnoreCase(homeHost);
-        navBar.setVisibility(offScope ? View.VISIBLE : View.GONE);
-        if (offScope) barHost.setText(host);
+    private void closeBrowseOverlay() {
+        if (browseOverlay == null) return;
+        ((FrameLayout) getWindow().getDecorView()).removeView(browseOverlay);
+        if (overlayWeb != null) { try { overlayWeb.destroy(); } catch (Throwable ignore) {} overlayWeb = null; }
+        browseOverlay = null;
+    }
+
+    /** オーバーレイWebViewの最小構成（sniff/広告ブロック/DL/Chrome UAは本体と共通の静的ヘルパを流用）。 */
+    @SuppressWarnings("SetJavaScriptEnabled")
+    private void setupOverlayWeb(final SnifferWebView w, final TextView hostLabel) {
+        WebSettings s = w.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setDatabaseEnabled(true);
+        s.setMediaPlaybackRequiresUserGesture(false);
+        s.setSupportMultipleWindows(false); // オーバーレイ内のwindow.openは同WebViewで開く
+        if (Build.VERSION.SDK_INT >= 21) s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        SnifferChrome.applyChromeUa(s);
+        SnifferChrome.applyGeolocation(this, s);
+        CookieManager cm = CookieManager.getInstance();
+        cm.setAcceptCookie(true);
+        if (Build.VERSION.SDK_INT >= 21) cm.setAcceptThirdPartyCookies(w, true);
+        SnifferChrome.enableDownloads(this, w);
+        final String[] ourl = { "" };
+        w.setWebViewClient(new WebViewClient() {
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
+                WebResourceResponse block = AdBlocker.get(PwaActivity.this).shouldBlock(req.getUrl());
+                if (block != null)
+                    return req.isForMainFrame()
+                            ? AdBlocker.get(PwaActivity.this).blockedPage(req.getUrl().getHost())
+                            : block;
+                Hits.sniff(req, ourl[0], null, ua);
+                return null;
+            }
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
+                Uri u = req.getUrl();
+                if (!isWeb(u)) {
+                    try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (Throwable ignore) {}
+                    return true;
+                }
+                return false;
+            }
+            @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap f) {
+                ourl[0] = url;
+                SnifferChrome.injectClientHints(view);
+                AdBlocker.get(PwaActivity.this).injectCosmetics(view, url);
+            }
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                ourl[0] = url;
+                AdBlocker.get(PwaActivity.this).injectCosmetics(view, url);
+                try { hostLabel.setText(Uri.parse(url).getHost()); } catch (Throwable ignore) {}
+            }
+        });
+        w.setWebChromeClient(new WebChromeClient());
     }
 
     /** http/https か（それ以外=独自スキーム等は外部アプリへ委譲する） */
@@ -350,6 +411,7 @@ public class PwaActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        closeBrowseOverlay();
         Media.stopPlaybackService(this);
         super.onDestroy();
     }
@@ -380,6 +442,11 @@ public class PwaActivity extends Activity {
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (browseOverlay != null) { // オーバーレイ優先: 中で戻れれば戻り、無ければ閉じる
+                if (overlayWeb != null && overlayWeb.canGoBack()) { overlayWeb.goBack(); return true; }
+                closeBrowseOverlay();
+                return true;
+            }
             if (chrome != null && chrome.exitFullscreen()) return true;
             if (web.canGoBack()) { web.goBack(); return true; }
         }
