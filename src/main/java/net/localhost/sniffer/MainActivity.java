@@ -980,12 +980,24 @@ public class MainActivity extends Activity {
                 .setSingleChoiceItems(labels, checked, (d, w) -> {
                     t.zoom = levels[w];
                     SnifferChrome.applyPageZoom(t.web, t.zoom);
+                    db.setDomainZoom(hostOf(t.pageUrl), t.zoom); // このドメインでは以後自動適用
                     // PC幅ページはviewport幅変更後の再フィットが要るのでリロードで確定させる
                     t.web.reload();
                     d.dismiss();
                 })
                 .setNegativeButton("閉じる", null)
                 .show();
+    }
+
+    /** URLからホスト名を取り出す（ドメイン別ズームのキー）。取れなければnull。 */
+    private static String hostOf(String url) {
+        try { return android.net.Uri.parse(url).getHost(); } catch (Throwable e) { return null; }
+    }
+
+    /** ページ読込時: このドメインの保存済みズームがあればそれを、無ければ既定100%を返す。 */
+    private int domainZoomOrDefault(String url) {
+        int z = db.getDomainZoom(hostOf(url));
+        return z > 0 ? z : 100;
     }
 
     private void showPwaDialog(Tab t) {
@@ -1338,7 +1350,9 @@ public class MainActivity extends Activity {
                 ClickTracker.inject(view); // クリック地点記録（リダイレクトブロック判定用）
                 SnifferChrome.injectYoutubeAdblock(view, url); // YouTube動画内広告の除去(早期注入でJSON.parseフック)
                 SnifferChrome.injectYoutubeNarrowFix(view, url); // www狭幅のはみ出し修正
-                if (t.zoom != 100) SnifferChrome.applyPageZoom(view, t.zoom);
+                // ドメイン別に保存済みのズームがあれば自動適用（無ければ既定100%へ戻す）
+                t.zoom = domainZoomOrDefault(url);
+                SnifferChrome.applyPageZoom(view, t.zoom);
                 ad.injectCosmetics(view, url); // 要素隠しCSSを早期注入（描画前に広告枠を潰す）
                 for (String js : UserScripts.get(MainActivity.this).forUrl(url, true))
                     view.evaluateJavascript(js, null);
@@ -1350,7 +1364,7 @@ public class MainActivity extends Activity {
                 Media.injectTracker(view);
                 ClickTracker.inject(view); // started時に注入失敗したページの保険
                 SnifferChrome.injectYoutubeNarrowFix(view, url); // started時は旧documentで消えるため再注入
-                if (t.zoom != 100) SnifferChrome.applyPageZoom(view, t.zoom);
+                SnifferChrome.applyPageZoom(view, t.zoom); // startedで消える場合の保険（同一値を再適用）
                 ad.injectCosmetics(view, url); // 動的挿入対策に読み込み完了時も上書き注入
                 db.addHistory(url, t.pageTitle);
                 OfflineStore.get(MainActivity.this).autoSave(view, db, url, t.pageTitle);

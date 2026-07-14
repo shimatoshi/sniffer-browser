@@ -24,6 +24,10 @@ public class DownloadService extends Service {
     private static final AtomicInteger ID = new AtomicInteger(1000);
     /** 通知ID → 実行中DL。通知の「中止」ボタンから引く */
     private final Map<Integer, HlsDownloader> active = new ConcurrentHashMap<>();
+    /** 同時実行数。0→1の遷移でだけstartForeground、最後の1件が終わった時だけstopSelfする
+     *  （複数DL中に1件終わるたびstopSelfしていた旧実装だと、進行中の他DLごとサービスが
+     *  死んでforeground保護を失い、通知も進捗も突然消えるバグがあった） */
+    private final AtomicInteger activeCount = new AtomicInteger(0);
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -45,13 +49,21 @@ public class DownloadService extends Service {
 
         final int nid = ID.incrementAndGet();
         ensureChannel();
-        startForeground(nid, build("ダウンロード開始", "準備中...", 0, true, nid));
+        final NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        Notification n0 = build("ダウンロード開始", "準備中...", 0, true, nid);
+        if (activeCount.getAndIncrement() == 0) {
+            startForeground(nid, n0);
+        } else {
+            // 既に別DLがforeground中。ここでstartForegroundを呼び直すと
+            // 「foreground状態と紐付く通知」が付け替わり、先発DL完了時に
+            // このDLの通知が巻き添えで消えてしまう
+            nm.notify(nid, n0);
+        }
 
         final File outDir = new File("/sdcard/Download");
         // 作業は内部ストレージ(/data)で行う。FUSE(/sdcard)経由だと激遅になるため。
         final File cache = getCacheDir();
 
-        final NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         new Worker(hit, outDir, cache, nm, nid).start();
         return START_NOT_STICKY;
     }
@@ -68,6 +80,7 @@ public class DownloadService extends Service {
             this.hit = hit; this.outDir = outDir; this.cache = cache; this.nm = nm; this.nid = nid;
         }
 
+        @SuppressWarnings("deprecation")
         @Override public void run() {
             HlsDownloader dl = new HlsDownloader(hit, outDir, cache, this);
             active.put(nid, dl);
@@ -75,6 +88,12 @@ public class DownloadService extends Service {
                 dl.run();
             } finally {
                 active.remove(nid);
+                if (activeCount.decrementAndGet() == 0) {
+                    // 通知は個別に更新済みなので、ここではforeground状態だけ解除する
+                    // （stopForeground(true)相当だと直前に出した完了/失敗通知が消えてしまう）
+                    stopForeground(false);
+                    stopSelf();
+                }
             }
         }
 
@@ -88,12 +107,10 @@ public class DownloadService extends Service {
         public void onDone(File out) {
             scan(DownloadService.this, out);
             nm.notify(nid, done("✓ 保存: " + out.getName(), "Download/" + out.getName()));
-            stopSelf();
         }
         public void onError(String msg) {
             if ("中止".equals(msg)) nm.cancel(nid);  // ユーザー中止は通知ごと消す
             else nm.notify(nid, done("✗ 失敗", String.valueOf(msg)));
-            stopSelf();
         }
     }
 

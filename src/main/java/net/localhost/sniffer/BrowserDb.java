@@ -51,7 +51,7 @@ public class BrowserDb extends SQLiteOpenHelper {
     }
 
     public BrowserDb(Context ctx) {
-        super(ctx, "browser.db", null, 9);
+        super(ctx, "browser.db", null, 10);
     }
 
     @Override
@@ -66,6 +66,7 @@ public class BrowserDb extends SQLiteOpenHelper {
         createOffline(db);
         createFeed(db);
         createPwas(db);
+        createDomainZoom(db);
     }
 
     @Override
@@ -84,6 +85,7 @@ public class BrowserDb extends SQLiteOpenHelper {
             try { db.execSQL("ALTER TABLE pwas ADD COLUMN zoom INTEGER NOT NULL DEFAULT 100"); }
             catch (Throwable ignore) {}
         }
+        if (oldV < 10) createDomainZoom(db);
     }
 
     private void createPwas(SQLiteDatabase db) {
@@ -124,6 +126,13 @@ public class BrowserDb extends SQLiteOpenHelper {
                 + " url TEXT NOT NULL UNIQUE, title TEXT, ts INTEGER NOT NULL)");
     }
 
+    private void createDomainZoom(SQLiteDatabase db) {
+        // 通常タブ用のドメイン→ズーム%永続化（PWA化してないサイトでもタブを閉じても覚えておく）。
+        // pwasテーブルのzoomとは別物（PWA化サイトはそちらで独立管理、無理に統合しない）。
+        db.execSQL("CREATE TABLE IF NOT EXISTS domain_zoom (domain TEXT PRIMARY KEY,"
+                + " zoom INTEGER NOT NULL, ts INTEGER NOT NULL)");
+    }
+
     // ---- ホーム固定サイト ----
 
     public void addPin(String url, String title) {
@@ -148,6 +157,33 @@ public class BrowserDb extends SQLiteOpenHelper {
             out.add(new Entry(c.getLong(0), c.getString(1), c.getString(2), c.getLong(3)));
         c.close();
         return out;
+    }
+
+    // ---- 通常タブのドメイン別ズーム ----
+
+    /** ズーム変更時に呼ぶ。100%(既定)は保存不要なので行ごと削除してテーブルを掃除する。 */
+    public void setDomainZoom(String domain, int zoom) {
+        if (domain == null || domain.isEmpty()) return;
+        if (zoom == 100) {
+            getWritableDatabase().delete("domain_zoom", "domain=?", new String[]{domain});
+            return;
+        }
+        ContentValues v = new ContentValues();
+        v.put("domain", domain);
+        v.put("zoom", zoom);
+        v.put("ts", System.currentTimeMillis());
+        getWritableDatabase().insertWithOnConflict(
+                "domain_zoom", null, v, SQLiteDatabase.CONFLICT_REPLACE);
+    }
+
+    /** 保存済みのドメイン別ズームを返す。未保存なら-1（呼び出し側で既定100%扱い）。 */
+    public int getDomainZoom(String domain) {
+        if (domain == null || domain.isEmpty()) return -1;
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT zoom FROM domain_zoom WHERE domain=?", new String[]{domain});
+        int r = c.moveToFirst() ? c.getInt(0) : -1;
+        c.close();
+        return r;
     }
 
     // ---- インストール済みPWA（ホーム表示） ----

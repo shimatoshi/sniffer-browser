@@ -84,6 +84,12 @@ public class AdBlocker {
             // 配信CDN(doppiocdn等)への無限リトライも発生しなくなる
             "mavrtracktor.com", "myavlive.com", "snaptrckr.fun", "mayzaent.com",
             "twinrdengine.com", "rmishe.com", "diffusedpassionquaking.com",
+            // mangaraw実地調査(2026-07-14): mangaraw.com/mangaraw.ioは調査時点で
+            // ドメインパーキング(Above.com系)のfingerprint-gate→クリック単価目的の
+            // リダイレクト網に飲まれておりmanga本体には到達できなかった(サイト移転/失効の可能性)。
+            // ゲート経路で実際に叩かれていたトラッキング/広告インフラだけは汎用的に害があるため
+            // ブロック対象に追加（本題のmangaraw広告構造は未解決、該当ノートは残す）
+            "abovedomains.com", "cdn-fileserver.com", "rapidresultsearch.com",
     };
 
     /**
