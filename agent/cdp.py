@@ -31,18 +31,20 @@ import websocket  # websocket-client
 CDP_HTTP = "http://127.0.0.1:9222"
 
 
-def _probe_headless(ws_url):
+def _probe_headless(ws_url, timeout=8):
     """page targetに短時間接続して window.__gobieHeadless マーカーを確認する。
-    読み取りevalのみ（副作用なし）。応答しないタブ（凍結中など）はFalse扱い。"""
+    読み取りevalのみ（副作用なし）。応答しないタブ（凍結中など）はFalse扱い。
+    timeoutは呼び出し側のCDP.timeoutに合わせて可変にする(旧固定3秒は端末のメモリ逼迫時に
+    WebViewのJSスレッド応答が間に合わずtarget誤判定=接続失敗の主因だった、2026-07-18判明)。"""
     try:
         ws = websocket.create_connection(
-            ws_url, timeout=3, max_size=None, suppress_origin=True)
+            ws_url, timeout=timeout, max_size=None, suppress_origin=True)
         try:
             ws.send(json.dumps({
                 "id": 1, "method": "Runtime.evaluate",
                 "params": {"expression": "window.__gobieHeadless===true",
                            "returnByValue": True}}))
-            deadline = time.time() + 3
+            deadline = time.time() + timeout
             while time.time() < deadline:
                 msg = json.loads(ws.recv())
                 if msg.get("id") == 1:
@@ -55,22 +57,28 @@ def _probe_headless(ws_url):
     return False
 
 
-def find_headless_target(http=CDP_HTTP):
+def find_headless_target(http=CDP_HTTP, timeout=8, retries=2):
     """HeadlessBrowserServiceのWebViewのtargetを返す。見つからなければNone。
-    MainActivityのユーザータブを誤って掴まないよう、マーカーで厳密に識別する。"""
-    try:
-        targets = json.load(urllib.request.urlopen(http + "/json", timeout=5))
-    except Exception:
-        return None
-    pages = [t for t in targets
-             if t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
-    for t in pages:
-        if _probe_headless(t["webSocketDebuggerUrl"]):
-            return t
-    # マーカー未注入の旧APK/起動直後への保険: about:blank はヘッドレス初期状態
-    for t in pages:
-        if t.get("url") in ("", "about:blank"):
-            return t
+    MainActivityのユーザータブを誤って掴まないよう、マーカーで厳密に識別する。
+    メモリ逼迫でJS応答が一時的に遅れるだけで実際には生きているケースがあるため、
+    1周で見つからなくても即諦めず、短い間隔を空けて複数周プローブし直す。"""
+    for attempt in range(retries + 1):
+        try:
+            targets = json.load(urllib.request.urlopen(http + "/json", timeout=timeout))
+        except Exception:
+            targets = None
+        if targets:
+            pages = [t for t in targets
+                     if t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
+            for t in pages:
+                if _probe_headless(t["webSocketDebuggerUrl"], timeout=timeout):
+                    return t
+            # マーカー未注入の旧APK/起動直後への保険: about:blank はヘッドレス初期状態
+            for t in pages:
+                if t.get("url") in ("", "about:blank"):
+                    return t
+        if attempt < retries:
+            time.sleep(1.5)
     return None
 
 
@@ -82,7 +90,7 @@ class CDP:
         self.ws = self._connect_page()
 
     def _connect_page(self):
-        t = find_headless_target(self.http)
+        t = find_headless_target(self.http, timeout=min(self.timeout, 8))
         if t is None:
             raise RuntimeError(
                 "headless target が見つからない（ユーザータブは操作しない）。"
