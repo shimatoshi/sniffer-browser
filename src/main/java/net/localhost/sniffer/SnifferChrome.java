@@ -272,7 +272,6 @@ public class SnifferChrome extends WebChromeClient {
         w.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageStarted(WebView v, String url, android.graphics.Bitmap fav) {
-                injectClientHints(v); // userAgentData等でWebViewと露呈しない
                 try { host.setText("🔒 " + Uri.parse(url).getHost()); } catch (Throwable ignore) {}
             }
         });
@@ -428,45 +427,6 @@ public class SnifferChrome extends WebChromeClient {
             s.setUserAgentString(null); // WebView既定へリセット
             applyChromeUa(s);
         }
-    }
-
-    /**
-     * 「埋め込みWebViewであること」を隠してデスクトップ/モバイルChrome相当に見せる偽装スクリプト。
-     * claude.ai のOAuth同意画面は、埋め込みWebViewを検出すると「承認」ボタンを
-     * disabled のままにする（= Claude Codeログインの承認ボタンがグレーアウトして
-     * 押せない原因）。WebViewを露呈する主な手掛かりを2つ潰す:
-     *   1) window.chrome が存在しない（本物のChromeにはある）→ 定番のWebView判定
-     *   2) navigator.userAgentData.brands が「Android WebView」を申告する
-     *      （UA文字列から「; wv」を消してもこの構造化APIは残る）
-     * Chromeバージョンは実UAから動的に拾うのでWebView更新でもずれない。
-     */
-    static final String UA_CLIENT_HINTS_JS =
-            "(function(){if(window.__snifferUaCh)return;window.__snifferUaCh=1;try{"
-            // 1) window.chrome を生やす（本物Chrome相当の最小スタブ）
-            + "if(!window.chrome){var noop=function(){};window.chrome={"
-            + "app:{isInstalled:false,InstallState:{DISABLED:'disabled',INSTALLED:'installed',NOT_INSTALLED:'not_installed'},RunningState:{CANNOT_RUN:'cannot_run',READY_TO_RUN:'ready_to_run',RUNNING:'running'}},"
-            + "runtime:{OnInstalledReason:{},PlatformArch:{},connect:noop,sendMessage:noop},"
-            + "loadTimes:function(){return {requestTime:Date.now()/1000,startLoadTime:Date.now()/1000,commitLoadTime:Date.now()/1000,finishLoadTime:Date.now()/1000};},"
-            + "csi:function(){return {onloadT:Date.now(),pageT:Date.now(),startE:Date.now(),tran:15};}};}"
-            // 2) navigator.userAgentData を Google Chrome 相当へ
-            //    （PC版サイト表示=デスクトップUAの時は Windows/非mobile を申告）
-            + "var ua=navigator.userAgent||'';"
-            + "var isMob=/Android/i.test(ua);"
-            + "var m=ua.match(/Chrome\\/(\\d+)(\\.[\\d.]+)?/);"
-            + "var major=m?m[1]:'149';"
-            + "var full=m?(m[1]+(m[2]||'.0.0.0')):'149.0.0.0';"
-            + "var plat=isMob?'Android':'Windows';"
-            + "var brands=[{brand:'Chromium',version:major},{brand:'Google Chrome',version:major},{brand:'Not)A;Brand',version:'24'}];"
-            + "var fvl=[{brand:'Chromium',version:full},{brand:'Google Chrome',version:full},{brand:'Not)A;Brand',version:'24.0.0.0'}];"
-            + "var d={brands:brands,mobile:isMob,platform:plat,"
-            + "getHighEntropyValues:function(h){return Promise.resolve({architecture:isMob?'arm':'x86',bitness:'64',brands:brands,fullVersionList:fvl,mobile:isMob,model:'',platform:plat,platformVersion:isMob?'10.0.0':'15.0.0',uaFullVersion:full,wow64:false});},"
-            + "toJSON:function(){return {brands:brands,mobile:isMob,platform:plat};}};"
-            + "Object.defineProperty(Navigator.prototype,'userAgentData',{get:function(){return d;},configurable:true});"
-            + "}catch(e){}})();";
-
-    /** onPageStartedから呼ぶ。埋め込みWebViewであることを隠してChrome相当に見せる。 */
-    public static void injectClientHints(WebView web) {
-        web.evaluateJavascript(UA_CLIENT_HINTS_JS, null);
     }
 
     /**

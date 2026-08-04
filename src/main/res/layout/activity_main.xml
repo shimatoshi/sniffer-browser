@@ -33,29 +33,47 @@
             android:paddingLeft="16dp"
             android:paddingRight="16dp" />
 
-        <Button
+        <ImageButton
             android:id="@+id/btnReload"
-            android:layout_width="wrap_content"
+            android:layout_width="40dp"
             android:layout_height="40dp"
-            android:minWidth="0dp"
-            android:paddingLeft="10dp"
-            android:paddingRight="10dp"
-            android:text="⟳"
-            android:textColor="#E8EAED"
-            android:textSize="19sp"
+            android:padding="9dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_refresh"
+            android:contentDescription="再読み込み"
             android:background="?android:attr/selectableItemBackgroundBorderless" />
 
-        <Button
-            android:id="@+id/btnDl"
-            android:layout_width="wrap_content"
-            android:layout_height="40dp"
-            android:minWidth="0dp"
-            android:paddingLeft="4dp"
-            android:paddingRight="8dp"
-            android:text="📥0"
-            android:textColor="#E8EAED"
-            android:textSize="13sp"
-            android:background="?android:attr/selectableItemBackgroundBorderless" />
+        <FrameLayout
+            android:layout_width="40dp"
+            android:layout_height="40dp">
+
+            <ImageButton
+                android:id="@+id/btnDl"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:padding="9dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_download"
+                android:contentDescription="ダウンロード"
+                android:background="?android:attr/selectableItemBackgroundBorderless" />
+
+            <TextView
+                android:id="@+id/btnDlBadge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="top|end"
+                android:minWidth="15dp"
+                android:minHeight="15dp"
+                android:gravity="center"
+                android:paddingLeft="3dp"
+                android:paddingRight="3dp"
+                android:background="@drawable/dl_badge_bg"
+                android:text="0"
+                android:textColor="#202124"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
+        </FrameLayout>
     </LinearLayout>
 
     <ProgressBar
@@ -86,40 +104,37 @@
         android:background="#202124"
         android:gravity="center_vertical">
 
-        <Button
+        <ImageButton
             android:id="@+id/btnBack"
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
-            android:minWidth="0dp"
-            android:padding="0dp"
-            android:text="←"
-            android:textSize="22sp"
-            android:textColor="#E8EAED"
+            android:padding="13dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_back"
+            android:contentDescription="戻る"
             android:background="?android:attr/selectableItemBackgroundBorderless" />
 
-        <Button
+        <ImageButton
             android:id="@+id/btnFwd"
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
-            android:minWidth="0dp"
-            android:padding="0dp"
-            android:text="→"
-            android:textSize="22sp"
-            android:textColor="#E8EAED"
+            android:padding="13dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_forward"
+            android:contentDescription="進む"
             android:background="?android:attr/selectableItemBackgroundBorderless" />
 
-        <Button
+        <ImageButton
             android:id="@+id/btnHome"
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
-            android:minWidth="0dp"
-            android:padding="0dp"
-            android:text="⌂"
-            android:textSize="24sp"
-            android:textColor="#E8EAED"
+            android:padding="12dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_home"
+            android:contentDescription="ホーム"
             android:background="?android:attr/selectableItemBackgroundBorderless" />
 
         <Button
@@ -130,21 +145,20 @@
             android:minWidth="0dp"
             android:padding="0dp"
             android:text="1"
-            android:textSize="12sp"
+            android:textSize="14sp"
             android:textStyle="bold"
             android:textColor="#E8EAED"
             android:background="@drawable/tab_count_bg" />
 
-        <Button
+        <ImageButton
             android:id="@+id/btnMenu"
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
-            android:minWidth="0dp"
-            android:padding="0dp"
-            android:text="⋮"
-            android:textSize="22sp"
-            android:textColor="#E8EAED"
+            android:padding="13dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_more_vert"
+            android:contentDescription="メニュー"
             android:background="?android:attr/selectableItemBackgroundBorderless" />
     </LinearLayout>
 </LinearLayout>

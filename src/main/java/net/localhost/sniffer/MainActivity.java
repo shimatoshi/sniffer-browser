@@ -48,7 +48,8 @@ public class MainActivity extends Activity {
 
     private PullRefreshContainer webContainer;
     private EditText urlBar;
-    private Button btnDl, btnTabs;
+    private Button btnTabs;
+    private TextView btnDlBadge;
     private ProgressBar progress;
     private BrowserDb db;
 
@@ -178,7 +179,8 @@ public class MainActivity extends Activity {
         // という報告により撤去。listener==nullだとPullRefreshContainer側で
         // ジェスチャー捕捉自体を行わなくなる。代わりにURLバー横のボタンでリロードする
         urlBar = findViewById(R.id.url);
-        btnDl = findViewById(R.id.btnDl);
+        View btnDl = findViewById(R.id.btnDl);
+        btnDlBadge = findViewById(R.id.btnDlBadge);
         btnTabs = findViewById(R.id.btnTabs);
         progress = findViewById(R.id.progress);
         db = new BrowserDb(this);
@@ -403,10 +405,12 @@ public class MainActivity extends Activity {
         trimLiveWebViews(); // 裏に回ったタブのWebViewを上限まで減らす
     }
 
-    /** 📥カウントを現在タブの表示中サイトで検出した件数に更新（DL欄のサイト追従） */
+    /** DLバッジの件数を現在タブの表示中サイトで検出した件数に更新（DL欄のサイト追従） */
     private void updateDlBtn() {
         Tab t = curTab();
-        btnDl.setText("📥" + Hits.countFor(t != null ? t.pageUrl : null));
+        int n = Hits.countFor(t != null ? t.pageUrl : null);
+        btnDlBadge.setVisibility(n > 0 ? View.VISIBLE : View.GONE);
+        btnDlBadge.setText(String.valueOf(n));
     }
 
     private void closeTab(int i) {
@@ -1466,7 +1470,6 @@ public class MainActivity extends Activity {
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap f) {
                 t.pageUrl = url;
                 if (t == curTab()) runOnUiThread(() -> { urlBar.setText(url); updateDlBtn(); });
-                SnifferChrome.injectClientHints(view); // userAgentDataのWebView申告をChrome偽装(OAuth承認ボタン無効化回避)
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
                 ClickTracker.inject(view); // クリック地点記録（リダイレクトブロック判定用）
                 SnifferChrome.injectYoutubeAdblock(view, url); // YouTube動画内広告の除去(早期注入でJSON.parseフック)

@@ -207,7 +207,6 @@ public class PwaActivity extends Activity {
                     Dbg.log(PwaActivity.this, "PWA yt guard: give up, stay on m");
                 }
                 pageUrl = url;
-                SnifferChrome.injectClientHints(view); // userAgentDataのWebView申告をChrome偽装(OAuth承認ボタン無効化回避)
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
                 ClickTracker.inject(view); // クリック地点記録（ポップアップ遮断判定用）
                 SnifferChrome.injectYoutubeAdblock(view, url); // YouTube動画内広告の除去(YouTube PWA対応)
@@ -360,7 +359,6 @@ public class PwaActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap f) {
                 ourl[0] = url;
-                SnifferChrome.injectClientHints(view);
                 AdBlocker.get(PwaActivity.this).injectCosmetics(view, url);
             }
             @Override
