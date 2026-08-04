@@ -2,55 +2,60 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:orientation="vertical"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="#202124">
 
     <LinearLayout
         android:id="@+id/topBar"
         android:orientation="horizontal"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="#222222"
-        android:padding="4dp"
+        android:background="#202124"
+        android:paddingLeft="8dp"
+        android:paddingRight="4dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
         android:gravity="center_vertical">
 
         <EditText
             android:id="@+id/url"
             android:layout_width="0dp"
-            android:layout_height="44dp"
+            android:layout_height="40dp"
             android:layout_weight="1"
             android:singleLine="true"
             android:inputType="textUri"
             android:imeOptions="actionGo"
-            android:hint="URL / 検索"
-            android:textColor="#ffffff"
-            android:textColorHint="#888888"
-            android:textSize="13sp"
-            android:background="#333333"
-            android:paddingLeft="8dp"
-            android:paddingRight="8dp" />
+            android:hint="検索またはURLを入力"
+            android:textColor="#E8EAED"
+            android:textColorHint="#9AA0A6"
+            android:textSize="14sp"
+            android:background="@drawable/omnibox_bg"
+            android:paddingLeft="16dp"
+            android:paddingRight="16dp" />
 
         <Button
             android:id="@+id/btnReload"
             android:layout_width="wrap_content"
-            android:layout_height="44dp"
+            android:layout_height="40dp"
             android:minWidth="0dp"
-            android:paddingLeft="6dp"
-            android:paddingRight="6dp"
+            android:paddingLeft="10dp"
+            android:paddingRight="10dp"
             android:text="⟳"
-            android:textColor="#ffffff"
-            android:textSize="18sp"
-            android:background="@android:color/transparent" />
+            android:textColor="#E8EAED"
+            android:textSize="19sp"
+            android:background="?android:attr/selectableItemBackgroundBorderless" />
 
         <Button
             android:id="@+id/btnDl"
             android:layout_width="wrap_content"
-            android:layout_height="44dp"
+            android:layout_height="40dp"
             android:minWidth="0dp"
-            android:paddingLeft="6dp"
-            android:paddingRight="6dp"
+            android:paddingLeft="4dp"
+            android:paddingRight="8dp"
             android:text="📥0"
-            android:textColor="#ffffff"
-            android:background="@android:color/transparent" />
+            android:textColor="#E8EAED"
+            android:textSize="13sp"
+            android:background="?android:attr/selectableItemBackgroundBorderless" />
     </LinearLayout>
 
     <ProgressBar
@@ -59,6 +64,7 @@
         android:layout_width="match_parent"
         android:layout_height="3dp"
         android:max="100"
+        android:progressTint="#8AB4F8"
         android:visibility="gone" />
 
     <net.localhost.sniffer.PullRefreshContainer
@@ -67,12 +73,17 @@
         android:layout_height="0dp"
         android:layout_weight="1" />
 
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1px"
+        android:background="#3C4043" />
+
     <LinearLayout
         android:id="@+id/bottomBar"
         android:orientation="horizontal"
         android:layout_width="match_parent"
-        android:layout_height="56dp"
-        android:background="#222222"
+        android:layout_height="48dp"
+        android:background="#202124"
         android:gravity="center_vertical">
 
         <Button
@@ -82,10 +93,10 @@
             android:layout_weight="1"
             android:minWidth="0dp"
             android:padding="0dp"
-            android:text="◀"
-            android:textSize="20sp"
-            android:textColor="#ffffff"
-            android:background="?android:attr/selectableItemBackground" />
+            android:text="←"
+            android:textSize="22sp"
+            android:textColor="#E8EAED"
+            android:background="?android:attr/selectableItemBackgroundBorderless" />
 
         <Button
             android:id="@+id/btnFwd"
@@ -94,10 +105,10 @@
             android:layout_weight="1"
             android:minWidth="0dp"
             android:padding="0dp"
-            android:text="▶"
-            android:textSize="20sp"
-            android:textColor="#ffffff"
-            android:background="?android:attr/selectableItemBackground" />
+            android:text="→"
+            android:textSize="22sp"
+            android:textColor="#E8EAED"
+            android:background="?android:attr/selectableItemBackgroundBorderless" />
 
         <Button
             android:id="@+id/btnHome"
@@ -106,10 +117,10 @@
             android:layout_weight="1"
             android:minWidth="0dp"
             android:padding="0dp"
-            android:text="🏠"
-            android:textSize="20sp"
-            android:textColor="#ffffff"
-            android:background="?android:attr/selectableItemBackground" />
+            android:text="⌂"
+            android:textSize="24sp"
+            android:textColor="#E8EAED"
+            android:background="?android:attr/selectableItemBackgroundBorderless" />
 
         <Button
             android:id="@+id/btnTabs"
@@ -118,10 +129,11 @@
             android:layout_weight="1"
             android:minWidth="0dp"
             android:padding="0dp"
-            android:text="❐1"
-            android:textSize="18sp"
-            android:textColor="#ffffff"
-            android:background="?android:attr/selectableItemBackground" />
+            android:text="1"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:textColor="#E8EAED"
+            android:background="@drawable/tab_count_bg" />
 
         <Button
             android:id="@+id/btnMenu"
@@ -132,7 +144,7 @@
             android:padding="0dp"
             android:text="⋮"
             android:textSize="22sp"
-            android:textColor="#ffffff"
-            android:background="?android:attr/selectableItemBackground" />
+            android:textColor="#E8EAED"
+            android:background="?android:attr/selectableItemBackgroundBorderless" />
     </LinearLayout>
 </LinearLayout>

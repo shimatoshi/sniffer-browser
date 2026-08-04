@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Chrome風タブカウンタ: 中央に小さい角丸スクエアの枠(数字はボタンtext) -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:width="23dp"
+        android:height="23dp"
+        android:gravity="center">
+        <shape android:shape="rectangle">
+            <stroke android:width="2dp" android:color="#E8EAED" />
+            <corners android:radius="5dp" />
+        </shape>
+    </item>
+</layer-list>

@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Gobieのランチャーアイコン: 川底に座るハゼ(goby)。
+     ハゼらしさ: 底に接地した姿勢・上に飛び出た目・大きな丸い頭・2基の背鰭 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 背景: 水色の円 -->
+    <path
+        android:fillColor="#2E86AB"
+        android:pathData="M54,2 A52,52 0 1,1 53.9,2 Z" />
+
+    <!-- 川底の砂 -->
+    <path
+        android:fillColor="#D9C089"
+        android:pathData="M8,74 C24,68 40,72 54,71 C70,70 86,67 100,73 L100,88 A52,52 0 0,1 8,88 Z" />
+
+    <!-- 小石 -->
+    <path android:fillColor="#B3985F"
+        android:pathData="M22,76 a4,3 0 1,0 8,0 a4,3 0 1,0 -8,0 Z
+                          M78,78 a5,3.5 0 1,0 10,0 a5,3.5 0 1,0 -10,0 Z" />
+
+    <!-- 尾鰭 -->
+    <path
+        android:fillColor="#8A6A3B"
+        android:pathData="M78,60 C86,52 92,50 97,52 C94,58 94,64 96,70 C91,72 84,70 78,66 Z" />
+
+    <!-- 第1・第2背鰭 -->
+    <path
+        android:fillColor="#8A6A3B"
+        android:pathData="M36,44 C37,35 46,33 49,42 Z
+                          M53,42 C56,33 66,34 68,44 Z" />
+
+    <!-- 胴体: 頭でかく尾へ細く、腹は砂に接地 -->
+    <path
+        android:fillColor="#C29A5B"
+        android:pathData="M16,58 C16,47 27,40 40,41 C56,42 68,48 80,58 C74,68 62,72 46,72 C32,72 16,68 16,58 Z" />
+
+    <!-- 腹側を明るく -->
+    <path
+        android:fillColor="#E3C68F"
+        android:pathData="M20,62 C28,68 42,70 52,69 C44,72 30,72 22,68 Z" />
+
+    <!-- 胸鰭 -->
+    <path
+        android:fillColor="#8A6A3B"
+        android:pathData="M44,58 C50,58 54,62 52,68 C46,68 42,64 44,58 Z" />
+
+    <!-- 体の斑紋 -->
+    <path android:fillColor="#7A5B32"
+        android:pathData="M48,52 a4,3 0 1,0 8,0 a4,3 0 1,0 -8,0 Z
+                          M60,58 a3.5,2.5 0 1,0 7,0 a3.5,2.5 0 1,0 -7,0 Z
+                          M68,52 a3,2.2 0 1,0 6,0 a3,2.2 0 1,0 -6,0 Z" />
+
+    <!-- 上に飛び出た目(ハゼ顔の要) -->
+    <path
+        android:fillColor="#C29A5B"
+        android:pathData="M24,42 a8,8 0 1,0 16,0 a8,8 0 1,0 -16,0 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M25.5,42 a6.5,6.5 0 1,0 13,0 a6.5,6.5 0 1,0 -13,0 Z" />
+    <path
+        android:fillColor="#26221C"
+        android:pathData="M29,42 a3.6,3.6 0 1,0 7.2,0 a3.6,3.6 0 1,0 -7.2,0 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M33.4,40.2 a1.4,1.4 0 1,0 2.8,0 a1.4,1.4 0 1,0 -2.8,0 Z" />
+
+    <!-- 口(への字でぼーっとした顔) -->
+    <path
+        android:strokeColor="#7A5B32"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M18,58 C21,60 25,60 28,59" />
+</vector>

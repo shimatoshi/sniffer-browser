@@ -40,7 +40,8 @@ import java.util.List;
 
 public class MainActivity extends Activity {
 
-    private static final String HOME = HomePage.URL_HOME;
+    // ホームは本物のGoogle（自作ホームはデバッグノート指摘で廃止。gobie://homeは旧互換で残る）
+    private static final String HOME = "https://www.google.com/";
     static final String ACTION_FOCUS_URL = "net.localhost.sniffer.FOCUS_URL";
     static final String ACTION_SEARCH = "net.localhost.sniffer.SEARCH";
     static final String EXTRA_QUERY = "query";
@@ -420,7 +421,7 @@ public class MainActivity extends Activity {
     }
 
     private void updateTabBtn() {
-        btnTabs.setText("❐" + tabs.size());
+        btnTabs.setText(String.valueOf(tabs.size())); // Chrome風: 枠付きスクエア(bg)内に数字だけ
     }
 
     private void showTabs() {
@@ -580,20 +581,11 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "WiFiログイン画面を呼び出し中…", Toast.LENGTH_SHORT).show();
     }
 
-    // ---- ホーム（gobie://home、ロゴ＋検索バー＋背景画像） ----
+    // ---- ホーム（本物のGoogle） ----
 
     private void goHome(Tab t, boolean force) {
-        web(t).loadDataWithBaseURL(HomePage.URL_HOME,
-                HomePage.render(HomePage.bgDataUrl(this), ENGINES[searchEngineIndex()][0]),
-                "text/html", "utf-8", HomePage.URL_HOME);
-        if (t == curTab()) urlBar.setText(HomePage.URL_HOME);
-    }
-
-    /** ホームを開いたままのタブを再描画（背景画像/検索エンジン変更後）。 */
-    private void rerenderHome() {
-        if (isFinishing() || isDestroyed()) return;
-        for (Tab x : tabs)
-            if (HomePage.URL_HOME.equals(x.web.getUrl())) goHome(x, false);
+        web(t).loadUrl(HOME);
+        if (t == curTab()) urlBar.setText(HOME);
     }
 
     /** ホーム内リンク gobie://search?q=... （旧ホームのpwa-open等も互換で残す） */
@@ -865,85 +857,16 @@ public class MainActivity extends Activity {
     // ---- 設定（カテゴリ別） ----
 
     private void showSettings() {
-        final String[] cats = {"🔍 検索エンジン", "🛡 アドブロック", "🏠 ホーム画面", "📦 オフライン"};
+        final String[] cats = {"🔍 検索エンジン", "🛡 アドブロック", "📦 オフライン"};
         new AlertDialog.Builder(this)
                 .setTitle("⚙ 設定")
                 .setItems(cats, (d, w) -> {
                     if (w == 0) showSearchEngineSettings();
                     else if (w == 1) showAdblockSettings();
-                    else if (w == 2) showHomeSettings();
                     else showOfflineSettings();
                 })
                 .setNegativeButton("閉じる", null)
                 .show();
-    }
-
-    // ---- 設定: ホーム画面（背景画像） ----
-
-    private static final int REQ_BG = 73;
-
-    private void showHomeSettings() {
-        boolean hasBg = HomePage.bgFile(this).exists();
-        final String[] items = hasBg
-                ? new String[]{"🖼 背景画像を変更", "背景画像を削除"}
-                : new String[]{"🖼 背景画像を選ぶ"};
-        new AlertDialog.Builder(this)
-                .setTitle("🏠 ホーム画面")
-                .setItems(items, (d, w) -> {
-                    if (w == 0) {
-                        Intent i = new Intent(Intent.ACTION_GET_CONTENT);
-                        i.setType("image/*");
-                        i.addCategory(Intent.CATEGORY_OPENABLE);
-                        try {
-                            startActivityForResult(Intent.createChooser(i, "ホーム背景画像"), REQ_BG);
-                        } catch (Throwable e) {
-                            Toast.makeText(this, "画像ピッカーを開けない: " + e, Toast.LENGTH_SHORT).show();
-                        }
-                    } else {
-                        HomePage.bgFile(this).delete();
-                        HomePage.invalidateBg();
-                        rerenderHome();
-                        Toast.makeText(this, "背景を削除した", Toast.LENGTH_SHORT).show();
-                    }
-                })
-                .setNegativeButton("閉じる", null)
-                .show();
-    }
-
-    /** 選択画像を画面サイズ程度に縮小してJPEG保存 → ホーム背景に反映 */
-    private void importHomeBg(final android.net.Uri uri) {
-        new Thread(() -> {
-            try {
-                android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
-                o.inJustDecodeBounds = true;
-                try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
-                    android.graphics.BitmapFactory.decodeStream(in, null, o);
-                }
-                int maxDim = 1440; // 端末画面より少し大きい程度に抑えてHTML埋め込みを軽くする
-                int sample = 1;
-                while (Math.max(o.outWidth, o.outHeight) / (sample * 2) >= maxDim) sample *= 2;
-                android.graphics.BitmapFactory.Options o2 = new android.graphics.BitmapFactory.Options();
-                o2.inSampleSize = sample;
-                android.graphics.Bitmap bm;
-                try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
-                    bm = android.graphics.BitmapFactory.decodeStream(in, null, o2);
-                }
-                if (bm == null) throw new IllegalStateException("decode失敗");
-                java.io.File out = HomePage.bgFile(this);
-                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(out)) {
-                    bm.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, fos);
-                }
-                bm.recycle();
-                HomePage.invalidateBg();
-                runOnUiThread(() -> {
-                    rerenderHome();
-                    Toast.makeText(this, "🖼 背景を設定した", Toast.LENGTH_SHORT).show();
-                });
-            } catch (Throwable e) {
-                runOnUiThread(() -> Toast.makeText(this,
-                        "背景の取り込み失敗: " + e, Toast.LENGTH_SHORT).show());
-            }
-        }).start();
     }
 
     // ---- 設定: 検索エンジン（デフォルトはGoogle、切替でDuckDuckGo/Bing） ----
@@ -957,7 +880,6 @@ public class MainActivity extends Activity {
                     getSharedPreferences("settings", MODE_PRIVATE)
                             .edit().putInt("searchEngine", w).apply();
                     Toast.makeText(this, "検索: " + names[w], Toast.LENGTH_SHORT).show();
-                    rerenderHome(); // ホームのロゴも切替える
                     d.dismiss();
                 })
                 .setNegativeButton("閉じる", null)
@@ -1764,12 +1686,6 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        if (requestCode == REQ_BG) {
-            if (resultCode == RESULT_OK && data != null && data.getData() != null)
-                importHomeBg(data.getData());
-            super.onActivityResult(requestCode, resultCode, data);
-            return;
-        }
         // ファイルピッカーは開いたタブのchromeだけがfileCbを持つので全タブへ中継して問題ない
         for (Tab t : tabs) t.chrome.onFileResult(requestCode, resultCode, data);
         super.onActivityResult(requestCode, resultCode, data);

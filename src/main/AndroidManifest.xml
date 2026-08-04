@@ -22,8 +22,8 @@
 
     <application
         android:name=".App"
-        android:label="Sniffer"
-        android:icon="@android:drawable/ic_menu_save"
+        android:label="Gobie"
+        android:icon="@drawable/ic_gobie"
         android:usesCleartextTraffic="true"
         android:hardwareAccelerated="true"
         android:largeHeap="true"
