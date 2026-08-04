@@ -220,6 +220,10 @@ public class SnifferChrome extends WebChromeClient {
         closePopup(); // 念のため既存を畳む（通常は無い）
         popupWeb = w;
         android.webkit.WebSettings s = w.getSettings();
+        // 仮WebView段階ではJS無効（広告対策）。ロード開始前のここで有効化する
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setDatabaseEnabled(true);
         applyChromeUa(s);
         CookieManager cm = CookieManager.getInstance();
         cm.setAcceptCookie(true);
@@ -317,13 +321,9 @@ public class SnifferChrome extends WebChromeClient {
             return true;
         }
         // 仮WebViewでURLだけ受け取り、メインWebViewで開く（シングルウィンドウ運用）。
-        // ただし認証ポップアップ(consume内で判定)はこの実体ごと昇格させるので、
-        // openerスクリプトが最初から動くようJS等は作成時点で有効化しておく
+        // JSは既定で無効のまま（popunderスクリプトを不発にする広告対策を兼ねる）。
+        // 認証ポップアップだけpromoteAuthPopup()が昇格時に有効化する
         WebView temp = new WebView(view.getContext());
-        android.webkit.WebSettings ts = temp.getSettings();
-        ts.setJavaScriptEnabled(true);
-        ts.setDomStorageEnabled(true);
-        ts.setDatabaseEnabled(true);
         final boolean[] done = {false};
         temp.setWebViewClient(new WebViewClient() {
             // 注意: 未アタッチViewのpost()は実行されない(API24+)。Handlerで確実に破棄する

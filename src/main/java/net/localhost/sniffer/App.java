@@ -24,7 +24,26 @@ public class App extends Application {
             // 再起動を跨いだBOOT_COMPLETEDに加え、プロセス起動のたびにも安全網として読み直す
             // （アプリ更新直後などBOOT_COMPLETEDが飛ばないケースをカバー）
             PwaScheduler.rescheduleAll(this);
+            installSwAdBlock();
         }
+    }
+
+    // Service Worker経由のfetchはWebViewClient.shouldInterceptRequestを素通りする。
+    // WebView 88時代は新JS構文で広告SDKごと死んでいたが149で動くようになったため、
+    // SW側にも同じブロック網を張る。広告ドメイン以外はnull返しで素通し（PWAのSWは無傷）
+    private void installSwAdBlock() {
+        if (Build.VERSION.SDK_INT < 24) return;
+        try {
+            final AdBlocker ab = AdBlocker.get(this);
+            android.webkit.ServiceWorkerController.getInstance().setServiceWorkerClient(
+                new android.webkit.ServiceWorkerClient() {
+                    @Override
+                    public android.webkit.WebResourceResponse shouldInterceptRequest(
+                            android.webkit.WebResourceRequest request) {
+                        return ab.shouldBlock(request.getUrl());
+                    }
+                });
+        } catch (Throwable ignore) {}
     }
 
     private boolean isMainProcess() {
