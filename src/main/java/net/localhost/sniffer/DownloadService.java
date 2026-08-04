@@ -41,6 +41,7 @@ public class DownloadService extends Service {
 
         final MediaHit hit = new MediaHit(intent.getStringExtra("url"), intent.getStringExtra("type"));
         hit.referer = intent.getStringExtra("referer");
+        hit.page = intent.getStringExtra("page");
         hit.cookie = intent.getStringExtra("cookie");
         hit.ua = intent.getStringExtra("ua");
         hit.title = intent.getStringExtra("title");
@@ -60,7 +61,13 @@ public class DownloadService extends Service {
             nm.notify(nid, n0);
         }
 
-        final File outDir = new File("/sdcard/Download");
+        // サイトごとにサブディレクトリを生成して振り分ける（shimatube等、DL先が
+        // Download直下に混ざらないように。ホスト名が取れない場合は直下に置く）
+        final String site = siteDirName(hit.page);
+        final File outDir = site != null
+                ? new File("/sdcard/Download", site)
+                : new File("/sdcard/Download");
+        outDir.mkdirs();
         // 作業は内部ストレージ(/data)で行う。FUSE(/sdcard)経由だと激遅になるため。
         final File cache = getCacheDir();
 
@@ -82,7 +89,7 @@ public class DownloadService extends Service {
 
         @SuppressWarnings("deprecation")
         @Override public void run() {
-            HlsDownloader dl = new HlsDownloader(hit, outDir, cache, this);
+            HlsDownloader dl = new HlsDownloader(DownloadService.this, hit, outDir, cache, this);
             active.put(nid, dl);
             try {
                 dl.run();
@@ -106,7 +113,9 @@ public class DownloadService extends Service {
         }
         public void onDone(File out) {
             scan(DownloadService.this, out);
-            nm.notify(nid, done("✓ 保存: " + out.getName(), "Download/" + out.getName()));
+            String path = out.getAbsolutePath();
+            String rel = path.startsWith("/sdcard/") ? path.substring("/sdcard/".length()) : out.getName();
+            nm.notify(nid, done("✓ 保存: " + out.getName(), rel));
         }
         public void onError(String msg) {
             if ("中止".equals(msg)) nm.cancel(nid);  // ユーザー中止は通知ごと消す
@@ -116,6 +125,19 @@ public class DownloadService extends Service {
 
     private String title(MediaHit h) {
         return (h.title != null && !h.title.isEmpty()) ? h.title : "ダウンロード";
+    }
+
+    /** DL元ページのホスト名からサブディレクトリ名を作る。取れなければnull（直下に保存）。 */
+    private static String siteDirName(String pageUrl) {
+        if (pageUrl == null || pageUrl.isEmpty()) return null;
+        try {
+            String host = new java.net.URI(pageUrl).getHost();
+            if (host == null || host.isEmpty()) return null;
+            host = host.replaceFirst("^www\\.", "");
+            return host.replaceAll("[^A-Za-z0-9._-]", "_");
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     @SuppressWarnings("deprecation")

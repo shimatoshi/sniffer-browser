@@ -113,7 +113,19 @@ public class PwaInstaller {
         return android.util.Base64.encodeToString(bo.toByteArray(), android.util.Base64.NO_WRAP);
     }
 
-    private static void pin(Activity act, String start, String name, String theme, Bitmap icon, boolean desktop, int zoom) {
+    static void pin(Activity act, String start, String name, String theme, Bitmap icon, boolean desktop, int zoom) {
+        pin(act, start, name, theme, icon, desktop, zoom, false);
+    }
+
+    /**
+     * freshId=true: 同じidのショートカットが既に「ピン留め済み」扱いだと、
+     * requestPinShortcut をランチャーが受理してもワークスペースにアイコンが増えない
+     * （ランチャーを乗り換えた直後に必ず踏む。旧ランチャー時代のピン状態がShortcutManagerに
+     *   残っていて、新ランチャーの画面には何も出ないまま「成功」になる）。
+     * その場合だけ未使用のidを採番して作り直す。
+     */
+    static void pin(Activity act, String start, String name, String theme, Bitmap icon, boolean desktop, int zoom,
+                    boolean freshId) {
         Intent launch = new Intent(Intent.ACTION_VIEW, Uri.parse(start), act, PwaActivity.class);
         launch.putExtra("pwa_title", name);
         if (theme != null) launch.putExtra("pwa_theme", theme);
@@ -127,8 +139,14 @@ public class PwaInstaller {
             if (Build.VERSION.SDK_INT >= 26) {
                 ShortcutManager sm = act.getSystemService(ShortcutManager.class);
                 if (sm != null && sm.isRequestPinShortcutSupported()) {
-                    ShortcutInfo si = new ShortcutInfo.Builder(act,
-                            "pwa-" + Integer.toHexString(start.hashCode()))
+                    String base = "pwa-" + Integer.toHexString(start.hashCode());
+                    String id = base;
+                    if (freshId) {
+                        java.util.HashSet<String> used = new java.util.HashSet<>();
+                        for (ShortcutInfo s : sm.getPinnedShortcuts()) used.add(s.getId());
+                        for (int n = 1; used.contains(id); n++) id = base + "-r" + n;
+                    }
+                    ShortcutInfo si = new ShortcutInfo.Builder(act, id)
                             .setShortLabel(name)
                             .setIcon(Icon.createWithBitmap(icon))
                             .setIntent(launch)
@@ -178,7 +196,7 @@ public class PwaInstaller {
         catch (Throwable e) { return rel; }
     }
 
-    private static HttpURLConnection open(String url, String ua) throws Exception {
+    static HttpURLConnection open(String url, String ua) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setConnectTimeout(10000);
         c.setReadTimeout(10000);
@@ -190,7 +208,7 @@ public class PwaInstaller {
         return c;
     }
 
-    private static String httpGetText(String url, String ua) throws Exception {
+    static String httpGetText(String url, String ua) throws Exception {
         HttpURLConnection c = open(url, ua);
         try (InputStream in = c.getInputStream()) {
             ByteArrayOutputStream bo = new ByteArrayOutputStream();
@@ -201,7 +219,7 @@ public class PwaInstaller {
         } finally { c.disconnect(); }
     }
 
-    private static Bitmap httpGetBitmap(String url, String ua) {
+    static Bitmap httpGetBitmap(String url, String ua) {
         try {
             HttpURLConnection c = open(url, ua);
             try (InputStream in = c.getInputStream()) {
@@ -213,7 +231,7 @@ public class PwaInstaller {
     // ---- icon helpers ----
 
     /** ランチャー/binder向けに常識的なサイズに収める */
-    private static Bitmap fitIcon(Bitmap b) {
+    static Bitmap fitIcon(Bitmap b) {
         int max = 256;
         if (b.getWidth() <= max && b.getHeight() <= max) return b;
         float r = Math.min((float) max / b.getWidth(), (float) max / b.getHeight());
@@ -223,7 +241,7 @@ public class PwaInstaller {
     }
 
     /** アイコンが取れなかったとき: 頭文字1字の生成アイコン */
-    private static Bitmap letterIcon(String name) {
+    static Bitmap letterIcon(String name) {
         int sz = 192;
         Bitmap b = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888);
         Canvas cv = new Canvas(b);

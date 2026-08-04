@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="net.localhost.sniffer"
-    android:versionCode="4"
-    android:versionName="1.4">
+    android:versionCode="9"
+    android:versionName="1.9">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -17,6 +17,8 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <!-- API25以下のランチャー向け旧ショートカット作成 -->
     <uses-permission android:name="com.android.launcher.permission.INSTALL_SHORTCUT" />
+    <!-- PWAスケジュール: 再起動後のアラーム再登録、オフライン復帰待ちジョブの永続化 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:name=".App"
@@ -56,6 +58,14 @@
             android:supportsPictureInPicture="true"
             android:documentLaunchMode="intoExisting"
             android:autoRemoveFromRecents="false" />
+
+        <!-- 自作PWAの一括登録（新端末セットアップ用・adbから叩く） -->
+        <activity
+            android:name=".PwaImportActivity"
+            android:exported="true"
+            android:label="PWA一括登録"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true" />
 
         <!-- 検索ウィジェットのバーから開く検索オーバーレイ（ホーム上に重なる） -->
         <activity
@@ -118,5 +128,25 @@
             android:name=".HeadlessBrowserService"
             android:exported="true"
             android:foregroundServiceType="dataSync" />
+
+        <!-- PWA定期取得スケジュール: 定刻アラームの受け口 -->
+        <receiver
+            android:name=".PwaScheduler$FireReceiver"
+            android:exported="false" />
+
+        <!-- 端末再起動後にアラームを読み直す -->
+        <receiver
+            android:name=".PwaScheduler$BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 定刻オフライン時、復帰待ちで積むジョブ -->
+        <service
+            android:name=".PwaScheduler$PwaScheduleJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
     </application>
 </manifest>

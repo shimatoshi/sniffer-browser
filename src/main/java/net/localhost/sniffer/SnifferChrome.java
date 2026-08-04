@@ -188,6 +188,112 @@ public class SnifferChrome extends WebChromeClient {
 
     // ---- window.open / target=_blank ----
 
+    // 認証ポップアップ（Googleログイン等）のオーバーレイ表示
+    private FrameLayout popupWrap;
+    private WebView popupWeb;
+
+    /**
+     * OAuth/GSIのポップアップログインで使われるホストか。
+     * これらは window.opener への postMessage で結果を親ページへ返すため、
+     * 「URLだけ奪ってメインWebViewで開く」方式だと opener が切れて
+     * accounts.google.com/gsi/transform 等が真っ白のまま止まる。
+     * 本物の子WebViewとして開き、opener関係を維持する必要がある。
+     */
+    static boolean isAuthPopup(String url) {
+        try {
+            String h = Uri.parse(url).getHost();
+            if (h == null) return false;
+            h = h.toLowerCase();
+            return h.equals("accounts.google.com") || h.equals("accounts.youtube.com")
+                    || h.equals("appleid.apple.com");
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    /**
+     * 仮WebViewを本物のログインポップアップに昇格させ、decorViewへ全画面で被せる。
+     * WebViewTransportで渡した実体をそのまま使うのでopener/postMessageが生きる。
+     * 完了時のwindow.close()はonCloseWindowで受けて畳む。
+     */
+    private void promoteAuthPopup(final WebView w, String firstUrl) {
+        closePopup(); // 念のため既存を畳む（通常は無い）
+        popupWeb = w;
+        android.webkit.WebSettings s = w.getSettings();
+        applyChromeUa(s);
+        CookieManager cm = CookieManager.getInstance();
+        cm.setAcceptCookie(true);
+        if (Build.VERSION.SDK_INT >= 21) cm.setAcceptThirdPartyCookies(w, true);
+
+        float dp = act.getResources().getDisplayMetrics().density;
+        android.widget.LinearLayout box = new android.widget.LinearLayout(act);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        box.setBackgroundColor(0xffffffff);
+        android.widget.LinearLayout bar = new android.widget.LinearLayout(act);
+        bar.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        bar.setBackgroundColor(0xff37474f);
+        bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        final android.widget.TextView host = new android.widget.TextView(act);
+        host.setTextColor(0xffffffff);
+        host.setSingleLine(true);
+        host.setPadding((int) (12 * dp), 0, 0, 0);
+        try { host.setText("🔒 " + Uri.parse(firstUrl).getHost()); } catch (Throwable ignore) {}
+        bar.addView(host, new android.widget.LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        android.widget.TextView close = new android.widget.TextView(act);
+        close.setText("✕");
+        close.setTextSize(18);
+        close.setTextColor(0xffffffff);
+        close.setPadding((int) (16 * dp), (int) (8 * dp), (int) (16 * dp), (int) (8 * dp));
+        close.setOnClickListener(v -> closePopup());
+        bar.addView(close);
+        box.addView(bar, new android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        box.addView(w, new android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        popupWrap = new FrameLayout(act);
+        popupWrap.addView(box, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        ((FrameLayout) act.getWindow().getDecorView()).addView(popupWrap,
+                new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        w.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onCloseWindow(WebView win) { // 認証完了後のwindow.close()
+                closePopup();
+            }
+        });
+        w.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageStarted(WebView v, String url, android.graphics.Bitmap fav) {
+                injectClientHints(v); // userAgentData等でWebViewと露呈しない
+                try { host.setText("🔒 " + Uri.parse(url).getHost()); } catch (Throwable ignore) {}
+            }
+        });
+        Dbg.log(act, "auth popup open: " + firstUrl);
+    }
+
+    /** 認証ポップアップ表示中か */
+    public boolean hasPopup() { return popupWrap != null; }
+
+    /** BACKキーから呼ぶ。ポップアップ表示中だったらtrue（処理済み） */
+    public boolean closePopup() {
+        if (popupWrap == null) return false;
+        Dbg.log(act, "auth popup close");
+        ((FrameLayout) act.getWindow().getDecorView()).removeView(popupWrap);
+        popupWrap = null;
+        final WebView w = popupWeb;
+        popupWeb = null;
+        if (w != null) {
+            // 破棄前にwindow.close相当を親へ伝える猶予は不要（postMessage済みが前提）
+            try { ((ViewGroup) w.getParent()).removeView(w); } catch (Throwable ignore) {}
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(w::destroy);
+        }
+        return true;
+    }
+
     @Override
     public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, Message resultMsg) {
         // 非ジェスチャのポップアップ＝広告。falseを返すとwindow.open()がnullになり
@@ -210,16 +316,29 @@ public class SnifferChrome extends WebChromeClient {
                     .postDelayed(dummy::destroy, 15000);
             return true;
         }
-        // 仮WebViewでURLだけ受け取り、メインWebViewで開く（シングルウィンドウ運用）
+        // 仮WebViewでURLだけ受け取り、メインWebViewで開く（シングルウィンドウ運用）。
+        // ただし認証ポップアップ(consume内で判定)はこの実体ごと昇格させるので、
+        // openerスクリプトが最初から動くようJS等は作成時点で有効化しておく
         WebView temp = new WebView(view.getContext());
+        android.webkit.WebSettings ts = temp.getSettings();
+        ts.setJavaScriptEnabled(true);
+        ts.setDomStorageEnabled(true);
+        ts.setDatabaseEnabled(true);
         final boolean[] done = {false};
         temp.setWebViewClient(new WebViewClient() {
             // 注意: 未アタッチViewのpost()は実行されない(API24+)。Handlerで確実に破棄する
-            private void consume(WebView v, String url) {
+            // 戻り値: 遷移を握り潰すならtrue（昇格時のみfalseでロード続行）
+            private boolean consume(WebView v, String url) {
                 // window.open('about:blank')→後からlocationを入れるサイト対策:
                 // 初回のabout:blankをメインに流すと白画面になるので実URLを待つ
-                if (url == null || url.isEmpty() || "about:blank".equals(url)) return;
-                if (done[0]) return;
+                if (url == null || url.isEmpty() || "about:blank".equals(url)) return true;
+                if (done[0]) return true;
+                // OAuth/GSIログインはopener連携必須。この実体を本物のポップアップへ昇格
+                if (isAuthPopup(url)) {
+                    done[0] = true;
+                    promoteAuthPopup(v, url);
+                    return false; // このWebView自身でロード続行
+                }
                 // ブロック対象ドメインの新規窓はメインWebViewへ流さず握り潰す
                 // （流すとshouldInterceptRequestの空レス化で白画面になる）
                 if (AdBlocker.get(act).shouldBlock(android.net.Uri.parse(url)) != null) {
@@ -227,7 +346,7 @@ public class SnifferChrome extends WebChromeClient {
                     Toast.makeText(act, "ポップアップをブロック: "
                             + android.net.Uri.parse(url).getHost(), Toast.LENGTH_SHORT).show();
                     new android.os.Handler(android.os.Looper.getMainLooper()).post(v::destroy);
-                    return;
+                    return true;
                 }
                 // リダイレクトブロックON時の強化: ジェスチャ有りポップアンダー対策。
                 // クリックハイジャックはユーザーのタップに便乗してwindow.open()するため
@@ -242,23 +361,22 @@ public class SnifferChrome extends WebChromeClient {
                         Toast.makeText(act, "ポップアップをブロック: "
                                 + android.net.Uri.parse(url).getHost(), Toast.LENGTH_SHORT).show();
                         new android.os.Handler(android.os.Looper.getMainLooper()).post(v::destroy);
-                        return;
+                        return true;
                     }
                 }
                 done[0] = true;
                 openUrl(url);
                 new android.os.Handler(android.os.Looper.getMainLooper()).post(v::destroy);
+                return true;
             }
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
-                consume(v, req.getUrl().toString());
-                return true;
+                return consume(v, req.getUrl().toString());
             }
             @SuppressWarnings("deprecation")
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, String url) {
-                consume(v, url);
-                return true;
+                return consume(v, url);
             }
         });
         WebView.WebViewTransport t = (WebView.WebViewTransport) resultMsg.obj;
@@ -628,6 +746,92 @@ public class SnifferChrome extends WebChromeClient {
                         Toast.makeText(act, "blob DL失敗: " + msg, Toast.LENGTH_SHORT).show());
             }
         }, BLOB_IFACE);
+        // shimatube自動DLローテーション用: DownloadManagerのエントリを直接削除する。
+        // JSからは端末のダウンロード済みファイルへ触れないため、この橋渡しが無いと
+        // 「容量上限に達したら古いDLを消して入れ替える」が実現できない。
+        web.addJavascriptInterface(new Object() {
+            @JavascriptInterface
+            public boolean removeDownload(long id) {
+                try {
+                    DownloadManager dm = (DownloadManager) act.getSystemService(Context.DOWNLOAD_SERVICE);
+                    return dm.remove(id) > 0;
+                } catch (Throwable e) {
+                    return false;
+                }
+            }
+            // 自動DLの失敗検知・再試行用。DownloadManager.STATUS_* をそのまま返す
+            // (SUCCESSFUL=8, FAILED=16, PENDING=1, RUNNING=2, PAUSED=4)。取得できなければ0。
+            @JavascriptInterface
+            public int getDownloadStatus(long id) {
+                DownloadManager dm = (DownloadManager) act.getSystemService(Context.DOWNLOAD_SERVICE);
+                DownloadManager.Query q = new DownloadManager.Query().setFilterById(id);
+                try (android.database.Cursor c = dm.query(q)) {
+                    if (c != null && c.moveToFirst()) {
+                        int idx = c.getColumnIndex(DownloadManager.COLUMN_STATUS);
+                        if (idx >= 0) return c.getInt(idx);
+                    }
+                } catch (Throwable e) {
+                    // fallthrough
+                }
+                return 0;
+            }
+            // 失敗(FAILED)したDLを「続きから」再開する。DownloadManagerの公開APIには
+            // FAILED後のresumeが無いため、既存の部分ファイルへ自前でHTTP Range取得して追記する。
+            // 成功/失敗は window.__snifferResumeDone(videoId, ok) へ非同期で返す。
+            @JavascriptInterface
+            public void resumeDownload(long oldId, String videoId) {
+                new Thread(() -> {
+                    boolean ok = false;
+                    try {
+                        DownloadManager dm = (DownloadManager) act.getSystemService(Context.DOWNLOAD_SERVICE);
+                        DownloadManager.Query q = new DownloadManager.Query().setFilterById(oldId);
+                        String localUriStr = null, remoteUriStr = null;
+                        try (android.database.Cursor c = dm.query(q)) {
+                            if (c != null && c.moveToFirst()) {
+                                int li = c.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI);
+                                int ri = c.getColumnIndex(DownloadManager.COLUMN_URI);
+                                if (li >= 0) localUriStr = c.getString(li);
+                                if (ri >= 0) remoteUriStr = c.getString(ri);
+                            }
+                        }
+                        if (localUriStr != null && remoteUriStr != null) {
+                            Uri localUri = Uri.parse(localUriStr);
+                            long existing = 0;
+                            try (android.os.ParcelFileDescriptor pfd =
+                                    act.getContentResolver().openFileDescriptor(localUri, "r")) {
+                                if (pfd != null) existing = pfd.getStatSize();
+                            } catch (Throwable ignore) { /* 取得できなければ0からとして続行 */ }
+
+                            java.net.HttpURLConnection conn =
+                                    (java.net.HttpURLConnection) new java.net.URL(remoteUriStr).openConnection();
+                            conn.setConnectTimeout(15000);
+                            conn.setReadTimeout(20000);
+                            if (existing > 0) conn.setRequestProperty("Range", "bytes=" + existing + "-");
+                            int code = conn.getResponseCode();
+                            if (code == 206 || code == 200) {
+                                try (android.os.ParcelFileDescriptor pfd =
+                                            act.getContentResolver().openFileDescriptor(localUri, "wa");
+                                     java.io.OutputStream out =
+                                            new java.io.FileOutputStream(pfd.getFileDescriptor());
+                                     java.io.InputStream in = conn.getInputStream()) {
+                                    byte[] buf = new byte[65536];
+                                    int n;
+                                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                                    ok = true;
+                                }
+                            }
+                            conn.disconnect();
+                        }
+                    } catch (Throwable e) {
+                        ok = false;
+                    }
+                    final boolean result = ok;
+                    act.runOnUiThread(() -> web.evaluateJavascript(
+                            "window.__snifferResumeDone && window.__snifferResumeDone('"
+                                    + videoId + "'," + result + ")", null));
+                }).start();
+            }
+        }, "SnifferDL");
         web.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) ->
                 downloadUrl(act, web, url, contentDisposition, mimetype));
     }
@@ -690,8 +894,14 @@ public class SnifferChrome extends WebChromeClient {
             r.setTitle(fn);
             // 進捗バー＋完了通知を出す（VISIBLE_NOTIFY_COMPLETEDは進捗バーを出さない）
             r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE);
-            ((DownloadManager) act.getSystemService(Context.DOWNLOAD_SERVICE)).enqueue(r);
+            long dlId = ((DownloadManager) act.getSystemService(Context.DOWNLOAD_SERVICE)).enqueue(r);
             Toast.makeText(act, "DL開始: " + fn, Toast.LENGTH_SHORT).show();
+            // shimatube自動DLのローテーション用: JS側へ enqueue id を返す。
+            // 対象PWA以外は window.__snifferDLDone が未定義なので単なる無害なno-op。
+            if (url.contains("/stream/") && url.contains("dl=1")) {
+                act.runOnUiThread(() -> web.evaluateJavascript(
+                        "window.__snifferDLDone && window.__snifferDLDone(" + dlId + ")", null));
+            }
         } catch (Throwable e) {
             Toast.makeText(act, "DL失敗: " + e, Toast.LENGTH_SHORT).show();
         }

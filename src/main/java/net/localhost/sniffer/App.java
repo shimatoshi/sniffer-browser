@@ -14,7 +14,17 @@ public class App extends Application {
     public void onCreate() {
         super.onCreate();
         // WebViewのsandboxed rendererプロセスでも呼ばれるので、メインプロセス限定
-        if (isMainProcess()) SwBackup.maybeRestore(this);
+        if (isMainProcess()) {
+            SwBackup.maybeRestore(this);
+            // スナップショット更新をPwaWarmerの完走に依存させない（12hクールダウンはSwBackup側）。
+            // 巡回は35PWA×最大35秒と長く、完走前にプロセスが死ぬと更新機会が丸ごと消える。
+            // 実際に2026-07-12から15日間バックアップが空き、evict時にその差分を失った。
+            // quota DBのpersistent固定でevictを止めた前提なら、起動時点の現状は信頼してよい。
+            SwBackup.maybeBackup(this);
+            // 再起動を跨いだBOOT_COMPLETEDに加え、プロセス起動のたびにも安全網として読み直す
+            // （アプリ更新直後などBOOT_COMPLETEDが飛ばないケースをカバー）
+            PwaScheduler.rescheduleAll(this);
+        }
     }
 
     private boolean isMainProcess() {

@@ -40,10 +40,15 @@ public class BrowserDb extends SQLiteOpenHelper {
         public final String url, name, theme, icon; // icon = PNGのbase64（dataURI本体）
         public final boolean desktop; // PC版サイト表示（デスクトップUA）で開く
         public final int zoom; // ページズーム%（100=等倍）
-        Pwa(long id, String url, String name, String theme, String icon, boolean desktop, int zoom) {
+        public final String schedule; // "HH:mm,HH:mm"の定期取得時刻。空/null=無効
+        public final boolean queueOffline; // 定刻にオフラインなら復帰時に自動実行するか
+        Pwa(long id, String url, String name, String theme, String icon, boolean desktop, int zoom,
+                String schedule, boolean queueOffline) {
             this.id = id; this.url = url; this.name = name;
             this.theme = theme; this.icon = icon; this.desktop = desktop;
             this.zoom = zoom > 0 ? zoom : 100;
+            this.schedule = schedule;
+            this.queueOffline = queueOffline;
         }
         public String label() {
             return (name == null || name.isEmpty()) ? url : name;
@@ -51,7 +56,7 @@ public class BrowserDb extends SQLiteOpenHelper {
     }
 
     public BrowserDb(Context ctx) {
-        super(ctx, "browser.db", null, 10);
+        super(ctx, "browser.db", null, 12);
     }
 
     @Override
@@ -67,6 +72,7 @@ public class BrowserDb extends SQLiteOpenHelper {
         createFeed(db);
         createPwas(db);
         createDomainZoom(db);
+        createDomainDesktop(db);
     }
 
     @Override
@@ -86,6 +92,13 @@ public class BrowserDb extends SQLiteOpenHelper {
             catch (Throwable ignore) {}
         }
         if (oldV < 10) createDomainZoom(db);
+        if (oldV < 11) {
+            try { db.execSQL("ALTER TABLE pwas ADD COLUMN schedule TEXT"); }
+            catch (Throwable ignore) {}
+            try { db.execSQL("ALTER TABLE pwas ADD COLUMN queue_offline INTEGER NOT NULL DEFAULT 1"); }
+            catch (Throwable ignore) {}
+        }
+        if (oldV < 12) createDomainDesktop(db);
     }
 
     private void createPwas(SQLiteDatabase db) {
@@ -93,6 +106,7 @@ public class BrowserDb extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE IF NOT EXISTS pwas (id INTEGER PRIMARY KEY AUTOINCREMENT,"
                 + " url TEXT NOT NULL UNIQUE, name TEXT, theme TEXT, icon TEXT,"
                 + " desktop INTEGER NOT NULL DEFAULT 0, zoom INTEGER NOT NULL DEFAULT 100,"
+                + " schedule TEXT, queue_offline INTEGER NOT NULL DEFAULT 1,"
                 + " ts INTEGER NOT NULL)");
     }
 
@@ -131,6 +145,12 @@ public class BrowserDb extends SQLiteOpenHelper {
         // pwasテーブルのzoomとは別物（PWA化サイトはそちらで独立管理、無理に統合しない）。
         db.execSQL("CREATE TABLE IF NOT EXISTS domain_zoom (domain TEXT PRIMARY KEY,"
                 + " zoom INTEGER NOT NULL, ts INTEGER NOT NULL)");
+    }
+
+    private void createDomainDesktop(SQLiteDatabase db) {
+        // 行の存在＝そのドメインをPC版UAで開く。ズームと同じ粒度で持つ。
+        db.execSQL("CREATE TABLE IF NOT EXISTS domain_desktop (domain TEXT PRIMARY KEY,"
+                + " ts INTEGER NOT NULL)");
     }
 
     // ---- ホーム固定サイト ----
@@ -186,6 +206,33 @@ public class BrowserDb extends SQLiteOpenHelper {
         return r;
     }
 
+    // ---- 通常タブのドメイン別PC版表示 ----
+
+    /** PC版表示に切り替えた時に呼ぶ。ズームと同じく、既定(モバイル)は行ごと削除して掃除する。
+     *  Teamsのように UA でモバイルを弾くサイトを、開くたびに手動で切り替えずに済ませるため。 */
+    public void setDomainDesktop(String domain, boolean desktop) {
+        if (domain == null || domain.isEmpty()) return;
+        if (!desktop) {
+            getWritableDatabase().delete("domain_desktop", "domain=?", new String[]{domain});
+            return;
+        }
+        ContentValues v = new ContentValues();
+        v.put("domain", domain);
+        v.put("ts", System.currentTimeMillis());
+        getWritableDatabase().insertWithOnConflict(
+                "domain_desktop", null, v, SQLiteDatabase.CONFLICT_REPLACE);
+    }
+
+    /** このドメインをPC版で開く設定になっているか。 */
+    public boolean isDomainDesktop(String domain) {
+        if (domain == null || domain.isEmpty()) return false;
+        Cursor c = getReadableDatabase().rawQuery(
+                "SELECT 1 FROM domain_desktop WHERE domain=?", new String[]{domain});
+        boolean r = c.moveToFirst();
+        c.close();
+        return r;
+    }
+
     // ---- インストール済みPWA（ホーム表示） ----
 
     /** PWA追加/再追加時。同一start_urlは最新の名前・アイコンで上書き。 */
@@ -222,13 +269,19 @@ public class BrowserDb extends SQLiteOpenHelper {
         getWritableDatabase().delete("pwas", "id=?", new String[]{String.valueOf(id)});
     }
 
+    private static final String PWA_COLS =
+            "id, url, name, theme, icon, desktop, zoom, schedule, queue_offline";
+
+    private static Pwa pwaFromCursor(Cursor c) {
+        return new Pwa(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4),
+                c.getInt(5) != 0, c.getInt(6), c.getString(7), c.getInt(8) != 0);
+    }
+
     public Pwa getPwa(long id) {
         Cursor c = getReadableDatabase().rawQuery(
-                "SELECT id, url, name, theme, icon, desktop, zoom FROM pwas WHERE id=?",
+                "SELECT " + PWA_COLS + " FROM pwas WHERE id=?",
                 new String[]{String.valueOf(id)});
-        Pwa p = c.moveToFirst()
-                ? new Pwa(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4), c.getInt(5) != 0, c.getInt(6))
-                : null;
+        Pwa p = c.moveToFirst() ? pwaFromCursor(c) : null;
         c.close();
         return p;
     }
@@ -237,11 +290,9 @@ public class BrowserDb extends SQLiteOpenHelper {
     public Pwa getPwaByUrl(String url) {
         if (url == null || url.isEmpty()) return null;
         Cursor c = getReadableDatabase().rawQuery(
-                "SELECT id, url, name, theme, icon, desktop, zoom FROM pwas WHERE url=?",
+                "SELECT " + PWA_COLS + " FROM pwas WHERE url=?",
                 new String[]{url});
-        Pwa p = c.moveToFirst()
-                ? new Pwa(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4), c.getInt(5) != 0, c.getInt(6))
-                : null;
+        Pwa p = c.moveToFirst() ? pwaFromCursor(c) : null;
         c.close();
         return p;
     }
@@ -249,11 +300,18 @@ public class BrowserDb extends SQLiteOpenHelper {
     public List<Pwa> listPwas() {
         List<Pwa> out = new ArrayList<>();
         Cursor c = getReadableDatabase().rawQuery(
-                "SELECT id, url, name, theme, icon, desktop, zoom FROM pwas ORDER BY id", null);
-        while (c.moveToNext())
-            out.add(new Pwa(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4), c.getInt(5) != 0, c.getInt(6)));
+                "SELECT " + PWA_COLS + " FROM pwas ORDER BY id", null);
+        while (c.moveToNext()) out.add(pwaFromCursor(c));
         c.close();
         return out;
+    }
+
+    /** 定期取得スケジュールの保存。schedule="HH:mm"のカンマ区切り（空/null=無効）。 */
+    public void updateSchedule(long id, String schedule, boolean queueOffline) {
+        ContentValues v = new ContentValues();
+        v.put("schedule", schedule);
+        v.put("queue_offline", queueOffline ? 1 : 0);
+        getWritableDatabase().update("pwas", v, "id=?", new String[]{String.valueOf(id)});
     }
 
     // ---- 記事ウィジェット用フィード ----

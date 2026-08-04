@@ -4,6 +4,7 @@ import android.media.MediaCodec;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.media.MediaMuxer;
+import android.os.StatFs;
 import android.util.Log;
 
 import java.io.ByteArrayOutputStream;
@@ -39,13 +40,18 @@ public class HlsDownloader {
     private static final boolean DBG_MUX = false; // remux PTSデバッグ（フレーム毎ログ）
     private static final int CONC = 6;
 
+    private final android.content.Context ctx;
     private final MediaHit hit;
     private final File outDir;
     private final File tmpDir;
     private final Listener cb;
     private volatile boolean canceled = false;
+    /** Cloudflare等にHttpURLConnectionを弾かれた時だけ遅延生成するWebView救済経路。1DLにつき使い回す */
+    private volatile CfBridge cfBridge;
+    private volatile boolean cfBridgeFailed = false;
 
-    public HlsDownloader(MediaHit hit, File outDir, File cacheDir, Listener cb) {
+    public HlsDownloader(android.content.Context ctx, MediaHit hit, File outDir, File cacheDir, Listener cb) {
+        this.ctx = ctx;
         this.hit = hit;
         this.outDir = outDir;
         this.tmpDir = new File(cacheDir, "dl_" + System.currentTimeMillis());
@@ -68,25 +74,66 @@ public class HlsDownloader {
             cb.onError(String.valueOf(t.getMessage()));
         } finally {
             deleteRec(tmpDir);
+            if (cfBridge != null) cfBridge.destroy();
         }
     }
 
     // ---------------- direct mp4 ----------------
+    /** 大容量ファイルほど途中で1回はネットワーク瞬断に当たりやすい。
+     *  従来はreadループが1回でも例外を投げると即失敗していた（HLSセグメント側は3回リトライ済みなのに非対称だった）。
+     *  Range指定で再開できるサーバならgotから再開、非対応ならファイルを作り直して最初から。 */
     private void downloadDirect() throws Exception {
         File out = uniqueFile(safeName(hit.title) + ".mp4");
-        HttpURLConnection c = open(hit.url);
-        int len = c.getContentLength();
-        InputStream in = c.getInputStream();
-        OutputStream os = new FileOutputStream(out);
-        byte[] buf = new byte[65536];
-        long got = 0; int n;
-        while ((n = in.read(buf)) > 0) {
-            if (canceled) { in.close(); os.close(); out.delete(); cb.onError("中止"); return; }
-            os.write(buf, 0, n); got += n;
-            if (len > 0) cb.onProgress((int) (got * 100 / len), "DL " + (got >> 20) + "/" + (len >> 20) + "MB");
-            else cb.onProgress(-1, "DL " + (got >> 20) + "MB");
+        long got = 0, len = -1;
+        int attempt = 0;
+        final int maxAttempts = 5;
+        OutputStream os = null;
+        try {
+            while (true) {
+                HttpURLConnection c = open(hit.url);
+                if (got > 0) c.setRequestProperty("Range", "bytes=" + got + "-");
+                InputStream in;
+                try {
+                    in = c.getInputStream();
+                } catch (java.io.IOException e) {
+                    if (++attempt >= maxAttempts) throw e;
+                    Thread.sleep(1000L * attempt);
+                    continue;
+                }
+                boolean resumed = got > 0 && c.getResponseCode() == 206;
+                if (got > 0 && !resumed) {
+                    // サーバがRange非対応 → 最初からやり直す
+                    got = 0;
+                    if (os != null) { os.close(); os = null; }
+                }
+                if (len < 0) {
+                    long total = c.getContentLengthLong();
+                    if (total > 0) {
+                        len = resumed ? total + got : total;
+                        checkSpace(outDir, len);
+                    }
+                }
+                if (os == null) os = new FileOutputStream(out, resumed);
+                byte[] buf = new byte[65536];
+                int n;
+                try {
+                    while ((n = in.read(buf)) > 0) {
+                        if (canceled) { in.close(); os.close(); out.delete(); cb.onError("中止"); return; }
+                        os.write(buf, 0, n); got += n;
+                        if (len > 0) cb.onProgress((int) (got * 100 / len), "DL " + (got >> 20) + "/" + (len >> 20) + "MB");
+                        else cb.onProgress(-1, "DL " + (got >> 20) + "MB");
+                    }
+                    in.close(); c.disconnect();
+                    break;
+                } catch (java.io.IOException e) {
+                    in.close(); c.disconnect();
+                    if (++attempt >= maxAttempts) throw e;
+                    Thread.sleep(1000L * attempt);
+                }
+            }
+        } finally {
+            if (os != null) os.close();
         }
-        os.close(); in.close(); c.disconnect();
         cb.onProgress(100, "完了");
         cb.onDone(out);
     }
@@ -101,8 +148,10 @@ public class HlsDownloader {
         // （UI側で画質選択済みの場合はhit.urlがmedia playlistなのでここを素通りし、hit.audioUrlを使う）
         String audioUrl = hit.audioUrl;
         List<Variant> vars = listVariants(text, playlistUrl);
+        long bw = 0;
         if (!vars.isEmpty()) {
             Variant best = pickBest(vars);
+            bw = best.bw;
             if (best.audioGroup != null) audioUrl = findAudioUri(text, playlistUrl, best.audioGroup);
             playlistUrl = best.url;
             text = httpText(playlistUrl);
@@ -119,6 +168,10 @@ public class HlsDownloader {
             if (a.segs.isEmpty()) a = null; // 空なら映像のみで続行
         }
 
+        // プレイリストの帯域幅×総再生時間で概算サイズを見積り、セグメントDL開始前に空き容量を先読みチェック
+        // （実サイズは変動するので緩めのマージンで判定。見積り不能なら素通り＝従来通りDL中に失敗する経路）
+        if (bw > 0 && v.durUs > 0) checkSpace(tmpDir, bw / 8 * (v.durUs / 1_000_000));
+
         final int totalAll = v.segs.size() + (a != null ? a.segs.size() : 0);
         final AtomicInteger done = new AtomicInteger(0);
 
@@ -131,6 +184,8 @@ public class HlsDownloader {
         }
 
         // mp4化（内部ストレージ上で変換 → 最後に1回だけ/sdcardへ書き出す）
+        // 変換元(v+a)と同サイズの出力が内部ストレージにもう1本できるので、実サイズで空き容量を確認
+        checkSpace(tmpDir, vFile.length() + (aFile != null ? aFile.length() : 0));
         cb.onProgress(93, "mp4変換中...");
         File tmpMp4 = new File(tmpDir, "out.mp4");
         List<File> srcs = new ArrayList<>();
@@ -146,11 +201,13 @@ public class HlsDownloader {
         File out;
         if (ok) {
             vFile.delete(); if (aFile != null) aFile.delete(); // 領域確保
+            checkSpace(outDir, tmpMp4.length());
             out = uniqueFile(safeName(hit.title) + ".mp4");
             cb.onProgress(99, "保存中...");
             copy(tmpMp4, out);
         } else {
             // 変換失敗時は映像の生データのまま保存。fMP4連結(init付き)は.mp4として再生可能
+            checkSpace(outDir, vFile.length());
             boolean fmp4 = vFile.getName().endsWith(".mp4");
             out = uniqueFile(safeName(hit.title) + (fmp4 ? ".mp4" : ".ts"));
             cb.onProgress(99, "保存中...");
@@ -507,7 +564,10 @@ public class HlsDownloader {
         c.setReadTimeout(30000);
         c.setInstanceFollowRedirects(true);
         if (hit.ua != null) c.setRequestProperty("User-Agent", hit.ua);
-        if (hit.referer != null) c.setRequestProperty("Referer", hit.referer);
+        // referer未取得(空文字含む)ならページURLで代替。CDNのホットリンク判定はReferer必須なことが多く、
+        // これが空だと(UA単独では通らず)高確率で403になる
+        String referer = (hit.referer != null && !hit.referer.isEmpty()) ? hit.referer : hit.page;
+        if (referer != null) c.setRequestProperty("Referer", referer);
         if (hit.cookie != null) c.setRequestProperty("Cookie", hit.cookie);
         return c;
     }
@@ -523,10 +583,61 @@ public class HlsDownloader {
 
     private byte[] httpBytes(String url) throws Exception {
         HttpURLConnection c = open(url);
-        InputStream in = c.getInputStream();
+        InputStream in;
+        try {
+            in = c.getInputStream();
+        } catch (java.io.IOException e) {
+            int code = -1;
+            try { code = c.getResponseCode(); } catch (Exception ignore) {}
+            String body = "";
+            try {
+                InputStream es = c.getErrorStream();
+                if (es != null) body = new String(readAll(es), "UTF-8");
+            } catch (Exception ignore) {}
+            Log.e(TAG, "http fail " + code + " url=" + url
+                    + " ua=" + hit.ua + " referer=" + hit.referer
+                    + " cookie=" + (hit.cookie != null ? "(len=" + hit.cookie.length() + ")" : "null")
+                    + " body=" + (body.length() > 300 ? body.substring(0, 300) : body));
+            byte[] viaBridge = tryCfBridge(url);
+            if (viaBridge != null) return viaBridge;
+            throw e;
+        }
         byte[] b = readAll(in);
         in.close(); c.disconnect();
         return b;
+    }
+
+    /** Cloudflare等のTLS/HTTP2フィンガープリント判別でHttpURLConnectionが弾かれた場合の救済。
+     *  実測(2026-07-21): 同一UA/Refererでもcurl(現代的TLSスタック)は通り、Android標準の
+     *  com.android.okhttpは403になるCDN(surrit.com=missav系)がある。本物のWebView(Chromium)の
+     *  fetch()を経由させれば同じ判別を通過できる。ブリッジ自体の初期化(ページ読込)が失敗した場合
+     *  だけ以後は諦める。個別URLのfetch失敗はブリッジを腐らせず毎回リトライさせる */
+    private byte[] tryCfBridge(String url) {
+        if (hit.page == null) return null;
+        CfBridge b = cfBridge;
+        if (b == null && !cfBridgeFailed) {
+            synchronized (this) {
+                b = cfBridge;
+                if (b == null && !cfBridgeFailed) {
+                    try {
+                        b = new CfBridge(ctx, hit.page, 20000);
+                        cfBridge = b;
+                    } catch (Throwable t) {
+                        Log.e(TAG, "CfBridge init failed", t);
+                        cfBridgeFailed = true;
+                        return null;
+                    }
+                }
+            }
+        }
+        if (b == null) return null;
+        try {
+            Log.w(TAG, "http直アクセス拒否 → WebView fetch()で再試行: " + url);
+            return b.fetch(url, 30000);
+        } catch (Throwable t) {
+            Log.e(TAG, "CfBridge fetch failed: " + url, t);
+            return null;
+        }
     }
 
     private byte[] httpBytesRetry(String url, int retry) throws Exception {
@@ -548,6 +659,25 @@ public class HlsDownloader {
         byte[] buf = new byte[65536]; int n;
         while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
         return bos.toByteArray();
+    }
+
+    /** dirが載ってるパーティションの空き容量を確認。不足なら分かりやすいメッセージで例外を投げる。
+     *  StatFs自体が取れない環境では判定をスキップする（従来通りDL中に失敗する経路にフォールバック）。 */
+    private static void checkSpace(File dir, long needBytes) throws java.io.IOException {
+        if (needBytes <= 0) return;
+        try {
+            StatFs sf = new StatFs(dir.getAbsolutePath());
+            long avail = sf.getAvailableBytes();
+            long margin = 100L * 1024 * 1024; // OS/他アプリ用の余白
+            if (avail < needBytes + margin) {
+                throw new java.io.IOException("空き容量不足(" + dir.getName() + "): 必要"
+                        + ((needBytes + margin) >> 20) + "MB, 空き" + (avail >> 20) + "MB");
+            }
+        } catch (java.io.IOException e) {
+            throw e;
+        } catch (Throwable ignore) {
+            // StatFs失敗時はチェックをスキップ
+        }
     }
 
     // ---------------- utils ----------------

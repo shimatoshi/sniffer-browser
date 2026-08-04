@@ -23,6 +23,7 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.BaseAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
@@ -59,14 +60,24 @@ public class MainActivity extends Activity {
     private boolean inPip = false;
     private boolean started = false;
 
-    /** 1タブ = 1WebView。sniff用のページ状態もタブごとに保持 */
+    /** 1タブ = 1WebView。sniff用のページ状態もタブごとに保持。
+     *  ただし復元タブの web は null のまま置き、実際に表示される時まで生成しない。 */
     private class Tab {
+        // 未表示の復元タブでは null。参照は web(t) 経由にして、そこで初めて実体化する。
         WebView web;
         SnifferChrome chrome;
         volatile String pageUrl = "";
         volatile String pageTitle = "";
         // 復元直後のバックグラウンドタブの未読込URL。スイッチ時に初めてloadUrlする（起動高速化）。
         volatile String pendingUrl = null;
+        // 未生成タブをタブ一覧に出すための表示名（WebViewが無いとgetTitleできないため）。
+        volatile String pendingTitle = null;
+        // ドメイン別PC版指定でUA差し替え→再読込を撃ったURL。同一URLで二重に撃たないための番人。
+        volatile String uaReloadedFor = null;
+        // 破棄したWebViewの履歴・スクロール位置。再表示時に restoreState で復元する。
+        volatile Bundle savedState = null;
+        // 最後に表示した時刻。どのタブを破棄するか（最近見ていない順）の判定に使う。
+        volatile long lastShown = 0;
         // WiFiログイン(キャプティブポータル)呼び出し中。リダイレクトブロックを一時的に素通しさせる。
         volatile boolean captiveProbe = false;
         // 外部アプリのリンクから開いたタブ。BACKで履歴が尽きたら呼び出し元アプリへ戻る。
@@ -78,7 +89,80 @@ public class MainActivity extends Activity {
     }
 
     private Tab curTab() { return (cur >= 0 && cur < tabs.size()) ? tabs.get(cur) : null; }
-    private WebView curWeb() { Tab t = curTab(); return t != null ? t.web : null; }
+    private WebView curWeb() { Tab t = curTab(); return t != null ? web(t) : null; }
+
+    /** タブのWebViewを取り出す。未生成（復元直後で一度も表示されていない）ならここで作る。
+     *  復元タブぶんのWebViewを起動時に全部作ると、開いてもいないタブが常駐してメモリを食う。 */
+    private WebView web(Tab t) {
+        if (t.web == null) materialize(t);
+        return t.web;
+    }
+
+    /** 外部エージェント(CDP)が掴むための専用WebView。タブ一覧には出さず、常に1個だけ生かす。
+     *  これが無いと、ハーネスは「空タブ」を探して見つからず、ユーザーが見ているタブを乗っ取る。 */
+    private WebView bridgeWeb;
+
+    /** CDPのターゲット一覧でこのWebViewを一意に見分けるための目印（title）。 */
+    static final String BRIDGE_TITLE = "sniffer-cdp-bridge";
+
+    private void setupBridgeWeb() {
+        if (bridgeWeb != null) return;
+        if (Build.VERSION.SDK_INT >= 19) WebView.setWebContentsDebuggingEnabled(true);
+        bridgeWeb = new WebView(this);
+        WebSettings s = bridgeWeb.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        SnifferChrome.applyChromeUa(s);
+        bridgeWeb.setWebViewClient(new WebViewClient()); // 外部ブラウザへ逃がさない
+        // GONEだと描画が止まりJS実行までスロットルされるため、1x1pxで最背面に置く。
+        webContainer.addView(bridgeWeb, 0, new FrameLayout.LayoutParams(1, 1));
+        bridgeWeb.loadDataWithBaseURL(null,
+                "<html><head><title>" + BRIDGE_TITLE + "</title></head><body></body></html>",
+                "text/html", "utf-8", null);
+    }
+
+    /** 同時に生かしておくWebViewの上限。これを超えた分は最近見ていない順に破棄する。
+     *  空のWebViewは1個0.4MB程度と安いが、描画済みのページは1枚で数百MB食うため、
+     *  効くのは「開いた事があるタブ」を裏で持ち続けない事。 */
+    private static final int MAX_LIVE_WEBVIEWS = 3;
+
+    /** 表示中でないタブのWebViewを上限まで減らす。破棄前に履歴とスクロール位置を退避する。 */
+    private void trimLiveWebViews() {
+        List<Tab> live = new ArrayList<>();
+        for (Tab t : tabs) if (t.web != null) live.add(t);
+        if (live.size() <= MAX_LIVE_WEBVIEWS) return;
+        java.util.Collections.sort(live, (a, b) -> Long.compare(b.lastShown, a.lastShown));
+        Tab keep = curTab();
+        for (int i = MAX_LIVE_WEBVIEWS; i < live.size(); i++) {
+            Tab t = live.get(i);
+            if (t != keep) discard(t);
+        }
+    }
+
+    /** タブのWebViewを捨てて、URL＋saveStateだけの状態に戻す。タブ自体は残る。 */
+    private void discard(Tab t) {
+        if (t.web == null) return;
+        Bundle b = new Bundle();
+        try {
+            t.web.saveState(b);   // 履歴とスクロール位置。戻った時に読み直しても同じ場所に出る
+            t.savedState = b;
+        } catch (Throwable ignore) { t.savedState = null; }
+        String u = t.web.getUrl();
+        if (u != null && !u.equals("about:blank")) t.pendingUrl = u; // restoreState失敗時の保険
+        t.pendingTitle = (t.pageTitle != null && !t.pageTitle.isEmpty()) ? t.pageTitle : t.pendingUrl;
+        webContainer.removeView(t.web);
+        t.web.destroy();
+        t.web = null;
+    }
+
+    /** タブのWebViewを実体化してコンテナに載せる（非表示状態） */
+    private void materialize(Tab t) {
+        setupWeb(t); // 中で t.web に代入される
+        webContainer.addView(t.web, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        t.web.setVisibility(View.GONE);
+        if (t.desktop) SnifferChrome.applyUaMode(t.web.getSettings(), true);
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -87,10 +171,11 @@ public class MainActivity extends Activity {
         net.localhost.debugnote.DebugNote.attach(this, "sniffer-browser");
 
         webContainer = findViewById(R.id.webContainer);
-        webContainer.setOnRefreshListener(() -> {
-            WebView w = curWeb();
-            if (w != null) w.reload();
-        });
+        setupBridgeWeb(); // CDP用の常設タブ。タブ復元より先に置いて必ず1個確保する
+
+        // 上スクロールのつもりが最上部での下方向ドラッグと誤検知され意図せずリロードされる
+        // という報告により撤去。listener==nullだとPullRefreshContainer側で
+        // ジェスチャー捕捉自体を行わなくなる。代わりにURLバー横のボタンでリロードする
         urlBar = findViewById(R.id.url);
         btnDl = findViewById(R.id.btnDl);
         btnTabs = findViewById(R.id.btnTabs);
@@ -101,6 +186,10 @@ public class MainActivity extends Activity {
         requestStorage();
 
         Hits.setListener(n -> runOnUiThread(this::updateDlBtn));
+        findViewById(R.id.btnReload).setOnClickListener(v -> {
+            WebView w = curWeb();
+            if (w != null) w.reload();
+        });
         btnDl.setOnClickListener(v -> showHits(false));
         btnDl.setOnLongClickListener(v -> { showHits(true); return true; });
         findViewById(R.id.btnBack).setOnClickListener(v -> {
@@ -187,7 +276,7 @@ public class MainActivity extends Activity {
         // セッション保存（タブのURL一覧＋選択中タブ）
         JSONArray arr = new JSONArray();
         for (Tab t : tabs) {
-            String u = t.web.getUrl();
+            String u = (t.web != null) ? t.web.getUrl() : null;
             if (u == null) u = t.pendingUrl; // まだ開いてない復元タブはpendingUrlを引き継ぐ
             if (u != null && !u.equals("about:blank")) arr.put(u);
         }
@@ -214,8 +303,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         Media.stopPlaybackService(this);
-        for (Tab t : tabs) t.web.destroy();
+        for (Tab t : tabs) if (t.web != null) t.web.destroy();
         tabs.clear();
+        if (bridgeWeb != null) { bridgeWeb.destroy(); bridgeWeb = null; }
         super.onDestroy();
     }
 
@@ -244,7 +334,7 @@ public class MainActivity extends Activity {
         if (isInPip) progress.setVisibility(View.GONE);
         // WebViewはPiP突入直後にHTML5全画面を強制解除するため、CSSで動画を全面固定する
         Tab t = curTab();
-        if (t != null) Media.setPipLayout(t.web, isInPip);
+        if (t != null) Media.setPipLayout(web(t), isInPip);
         syncPlaybackService();
     }
 
@@ -264,15 +354,18 @@ public class MainActivity extends Activity {
 
     private Tab createTab(String url, boolean switchTo) {
         Tab t = new Tab();
-        setupWeb(t);
-        webContainer.addView(t.web, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        t.web.setVisibility(View.GONE);
         tabs.add(t);
-        if (url != null) {
-            if (url.startsWith("gobie://")) goHome(t, false); // セッション復元含む
-            else if (switchTo) t.web.loadUrl(url);
-            else t.pendingUrl = url; // バックグラウンド復元タブはスイッチ時まで読込を遅延
+        if (url != null && !switchTo && !url.startsWith("gobie://")) {
+            // セッション復元のバックグラウンドタブ。URLだけ覚えて WebView は作らない。
+            // 実体化は switchTab（＝実際に表示される時）まで遅らせる。
+            t.pendingUrl = url;
+            t.pendingTitle = url;
+        } else {
+            materialize(t);
+            if (url != null) {
+                if (url.startsWith("gobie://")) goHome(t, false); // セッション復元含む
+                else web(t).loadUrl(url);
+            }
         }
         if (switchTo) switchTab(tabs.size() - 1);
         else updateTabBtn();
@@ -282,21 +375,31 @@ public class MainActivity extends Activity {
     private void switchTab(int i) {
         if (i < 0 || i >= tabs.size()) return;
         Tab prev = curTab();
-        if (prev != null) prev.web.setVisibility(View.GONE);
+        if (prev != null && prev.web != null) prev.web.setVisibility(View.GONE);
         cur = i;
         Tab t = tabs.get(i);
-        t.web.setVisibility(View.VISIBLE);
-        if (t.pendingUrl != null) {           // 遅延復元タブを初回表示時にロード
+        t.lastShown = System.currentTimeMillis();
+        boolean fresh = (t.web == null);       // ここで初めて実体化されるタブか
+        WebView w = web(t);
+        w.setVisibility(View.VISIBLE);
+        if (fresh) prepareUa(t, t.pendingUrl); // 読み込む前にPC版UAを決める
+        if (t.savedState != null) {            // 破棄済みタブ: 履歴とスクロール位置ごと復元
+            Bundle b = t.savedState;
+            t.savedState = null;
+            if (w.restoreState(b) == null && t.pendingUrl != null) w.loadUrl(t.pendingUrl);
+            t.pendingUrl = null;
+        } else if (t.pendingUrl != null) {     // 遅延復元タブを初回表示時にロード
             String p = t.pendingUrl;
             t.pendingUrl = null;
-            t.web.loadUrl(p);
+            w.loadUrl(p);
         }
-        String u = t.web.getUrl();
+        String u = w.getUrl();
         if (u == null) u = t.pendingUrl;
         urlBar.setText(u != null ? u : "");
         progress.setVisibility(View.GONE);
         updateTabBtn();
         updateDlBtn();
+        trimLiveWebViews(); // 裏に回ったタブのWebViewを上限まで減らす
     }
 
     /** 📥カウントを現在タブの表示中サイトで検出した件数に更新（DL欄のサイト追従） */
@@ -308,8 +411,7 @@ public class MainActivity extends Activity {
     private void closeTab(int i) {
         if (i < 0 || i >= tabs.size()) return;
         Tab t = tabs.remove(i);
-        webContainer.removeView(t.web);
-        t.web.destroy();
+        if (t.web != null) { webContainer.removeView(t.web); t.web.destroy(); }
         if (tabs.isEmpty()) { cur = -1; createTab(HOME, true); return; }
         int next = (i == cur) ? Math.min(i, tabs.size() - 1)
                               : (i < cur ? cur - 1 : cur);
@@ -342,13 +444,13 @@ public class MainActivity extends Activity {
                 LinearLayout col = new LinearLayout(MainActivity.this);
                 col.setOrientation(LinearLayout.VERTICAL);
                 TextView title = new TextView(MainActivity.this);
-                String tt = t.web.getTitle();
+                String tt = (t.web != null) ? t.web.getTitle() : t.pendingTitle;
                 if ((tt == null || tt.isEmpty()) && t.pendingUrl != null) tt = t.pendingUrl;
                 title.setText((p == cur ? "▶ " : "") + (tt == null || tt.isEmpty() ? "(無題)" : tt));
                 title.setSingleLine(true);
                 title.setTextSize(15);
                 TextView url = new TextView(MainActivity.this);
-                String uu = t.web.getUrl();
+                String uu = (t.web != null) ? t.web.getUrl() : null;
                 if (uu == null) uu = t.pendingUrl;
                 url.setText(uu == null ? "" : uu);
                 url.setSingleLine(true);
@@ -390,12 +492,12 @@ public class MainActivity extends Activity {
         m.add(0, 12, 0, t.desktop ? "📱 モバイル版に戻す" : "🖥 PC版サイト");
         m.add(0, 17, 0, "🔍 ズーム (" + t.zoom + "%)");
         // YouTube動画ページなら動画DL項目を出す
-        final String ytId = SnifferChrome.youtubeVideoId(t.web.getUrl());
+        final String ytId = SnifferChrome.youtubeVideoId(web(t).getUrl());
         if (ytId != null) {
             m.add(0, 15, 0, "⬇ この動画をDL (ShimaTube)");
             m.add(0, 16, 0, "♪ 音声のみDL (ShimaTube)");
         }
-        boolean bm = db.isBookmarked(t.web.getUrl());
+        boolean bm = db.isBookmarked(web(t).getUrl());
         m.add(0, 3, 0, bm ? "★ ブックマーク解除" : "☆ ブックマークに追加");
         m.add(0, 4, 0, "📑 ブックマーク");
         m.add(0, 5, 0, "🕘 履歴");
@@ -409,15 +511,15 @@ public class MainActivity extends Activity {
         m.add(0, 7, 0, "⚙ 設定");
         pm.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
-                case 2: t.web.reload(); return true;
+                case 2: web(t).reload(); return true;
                 case 3:
-                    String u = t.web.getUrl();
+                    String u = web(t).getUrl();
                     if (u == null) return true;
                     if (bm) {
                         db.removeBookmark(u);
                         Toast.makeText(this, "ブックマーク解除", Toast.LENGTH_SHORT).show();
                     } else {
-                        db.addBookmark(u, t.web.getTitle());
+                        db.addBookmark(u, web(t).getTitle());
                         Toast.makeText(this, "★ 追加した", Toast.LENGTH_SHORT).show();
                     }
                     return true;
@@ -431,20 +533,30 @@ public class MainActivity extends Activity {
                 case 11: openCaptivePortal(t); return true;
                 case 12:
                     t.desktop = !t.desktop;
-                    SnifferChrome.applyUaMode(t.web.getSettings(), t.desktop);
-                    t.web.reload(); // ズームはロードフックのapplyPageZoomがページ種別で付け替える
-                    Toast.makeText(this, t.desktop ? "🖥 PC版で表示" : "📱 モバイル版で表示",
+                    SnifferChrome.applyUaMode(web(t).getSettings(), t.desktop);
+                    // このドメインでは以後自動でPC版にする（ズームと同じ扱い）。
+                    // 手動で戻せば行が消えるので、覚えさせたくない時は戻せばよい。
+                    db.setDomainDesktop(hostOf(t.pageUrl), t.desktop);
+                    t.uaReloadedFor = t.pageUrl; // 直後のonPageStartedで二重に撃たせない
+                    // 「非対応ブラウザ」ページに飛ばされている場合、reloadでは同じページに戻るだけ。
+                    // PC版UAを持った状態でサイトのトップから入り直す。
+                    String reentry = t.desktop && isUnsupportedLanding(t.pageUrl)
+                            ? originOf(t.pageUrl) : null;
+                    if (reentry != null) web(t).loadUrl(reentry);
+                    else web(t).reload(); // ズームはロードフックのapplyPageZoomがページ種別で付け替える
+                    Toast.makeText(this, t.desktop ? "🖥 PC版で表示（このサイトは以後PC版）"
+                                    : "📱 モバイル版で表示",
                             Toast.LENGTH_SHORT).show();
                     return true;
                 case 13: showPwaList(); return true;
                 case 14: showPins(); return true;
                 case 15:
                     if (ytId != null)
-                        SnifferChrome.downloadYoutube(this, ytId, t.web.getTitle(), false);
+                        SnifferChrome.downloadYoutube(this, ytId, web(t).getTitle(), false);
                     return true;
                 case 16:
                     if (ytId != null)
-                        SnifferChrome.downloadYoutube(this, ytId, t.web.getTitle(), true);
+                        SnifferChrome.downloadYoutube(this, ytId, web(t).getTitle(), true);
                     return true;
                 case 17: showZoomDialog(t); return true;
             }
@@ -459,11 +571,11 @@ public class MainActivity extends Activity {
      *  既知のHTTP probeをキャッシュ無しで叩き、最新のログインページへ302で飛ばさせる。 */
     private void openCaptivePortal(Tab t) {
         if (t == null) return;
-        t.web.clearCache(true);      // busy画面など古いポータル応答を捨てて取り直す
+        web(t).clearCache(true);      // busy画面など古いポータル応答を捨てて取り直す
         t.captiveProbe = true;        // 続くポータルへの無操作リダイレクトを素通しさせる
         // 平文HTTPの軽量probe。ポータル配下では302でログイン画面へリダイレクトされる。
         String probe = "http://captive.apple.com/hotspot-detect.html";
-        t.web.loadUrl(probe);
+        web(t).loadUrl(probe);
         if (t == curTab()) urlBar.setText(probe);
         Toast.makeText(this, "WiFiログイン画面を呼び出し中…", Toast.LENGTH_SHORT).show();
     }
@@ -471,7 +583,7 @@ public class MainActivity extends Activity {
     // ---- ホーム（gobie://home、ロゴ＋検索バー＋背景画像） ----
 
     private void goHome(Tab t, boolean force) {
-        t.web.loadDataWithBaseURL(HomePage.URL_HOME,
+        web(t).loadDataWithBaseURL(HomePage.URL_HOME,
                 HomePage.render(HomePage.bgDataUrl(this), ENGINES[searchEngineIndex()][0]),
                 "text/html", "utf-8", HomePage.URL_HOME);
         if (t == curTab()) urlBar.setText(HomePage.URL_HOME);
@@ -579,10 +691,13 @@ public class MainActivity extends Activity {
         dlg.show();
     }
 
-    /** PWA個別メニュー: 開く / アップデート / 削除。 */
+    /** PWA個別メニュー: 開く / アップデート / スケジュール / 削除。 */
     private void showPwaItemMenu(BrowserDb.Pwa p) {
         if (p == null) return;
-        final String[] items = {"開く", "🔄 アップデート（キャッシュ全消し）", "🗑 削除"};
+        final String[] items = {
+                "開く", "🔄 アップデート（キャッシュ全消し）",
+                "⏰ スケジュール" + (PwaScheduler.hasSchedule(p) ? "（設定済）" : ""),
+                "🗑 削除"};
         new AlertDialog.Builder(this)
                 .setTitle(p.label())
                 .setItems(items, (d, w) -> {
@@ -601,13 +716,65 @@ public class MainActivity extends Activity {
                                     .show();
                             break;
                         case 2:
+                            showPwaScheduleDialog(p);
+                            break;
+                        case 3:
                             db.removePwa(p.id);
+                            PwaScheduler.cancelForPwa(getApplicationContext(), p.id);
                             Toast.makeText(this, "削除（ランチャーのアイコンは手動で）",
                                     Toast.LENGTH_SHORT).show();
                             break;
                     }
                 })
                 .setNegativeButton("閉じる", null)
+                .show();
+    }
+
+    /**
+     * PWA個別の定期取得スケジュール設定。
+     * 時刻を複数（カンマ区切りHH:mm）指定でき、定刻オンラインなら即実行、
+     * オフラインならチェックボックスで「復帰時に自動実行」を選べる（既定ON）。
+     */
+    private void showPwaScheduleDialog(BrowserDb.Pwa p) {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(48, 16, 48, 0);
+
+        final EditText times = new EditText(this);
+        times.setHint("例: 7:00,12:30,22:00（空=無効）");
+        times.setSingleLine(true);
+        times.setText(p.schedule != null ? p.schedule : "");
+        root.addView(times);
+
+        final CheckBox queueOffline = new CheckBox(this);
+        queueOffline.setText("定刻オフラインなら復帰時に自動実行");
+        queueOffline.setChecked(p.queueOffline);
+        root.addView(queueOffline);
+
+        new AlertDialog.Builder(this)
+                .setTitle("⏰ " + p.label() + " のスケジュール")
+                .setView(root)
+                .setPositiveButton("保存", (d, w) -> {
+                    StringBuilder norm = new StringBuilder();
+                    for (String part : times.getText().toString().split(",")) {
+                        part = part.trim();
+                        if (part.isEmpty()) continue;
+                        int[] hm = PwaScheduler.parseTime(part);
+                        if (hm == null) {
+                            Toast.makeText(this, "時刻の形式が不正: " + part, Toast.LENGTH_SHORT).show();
+                            return;
+                        }
+                        if (norm.length() > 0) norm.append(",");
+                        norm.append(String.format(java.util.Locale.US, "%02d:%02d", hm[0], hm[1]));
+                    }
+                    String schedule = norm.length() > 0 ? norm.toString() : null;
+                    db.updateSchedule(p.id, schedule, queueOffline.isChecked());
+                    BrowserDb.Pwa updated = db.getPwa(p.id);
+                    PwaScheduler.rescheduleForPwa(getApplicationContext(), updated);
+                    Toast.makeText(this, schedule != null ? "スケジュールを保存しました" : "スケジュールを解除しました",
+                            Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("やめる", null)
                 .show();
     }
 
@@ -664,7 +831,7 @@ public class MainActivity extends Activity {
     }
 
     private void showPinDialog(Tab t) {
-        String u0 = t.web.getUrl();
+        String u0 = web(t).getUrl();
         if (u0 == null || u0.startsWith("gobie://")) {
             Toast.makeText(this, "固定したいサイトを開いてから", Toast.LENGTH_SHORT).show();
             return;
@@ -675,7 +842,7 @@ public class MainActivity extends Activity {
         final EditText name = new EditText(this);
         name.setHint("表示名");
         name.setSingleLine(true);
-        name.setText(t.web.getTitle());
+        name.setText(web(t).getTitle());
         root.addView(name);
         final EditText url = new EditText(this);
         url.setHint("URL（トップページに削ると記事ウィジェットの新着取得が安定）");
@@ -979,10 +1146,10 @@ public class MainActivity extends Activity {
                 .setTitle("🔍 ページズーム")
                 .setSingleChoiceItems(labels, checked, (d, w) -> {
                     t.zoom = levels[w];
-                    SnifferChrome.applyPageZoom(t.web, t.zoom);
+                    SnifferChrome.applyPageZoom(web(t), t.zoom);
                     db.setDomainZoom(hostOf(t.pageUrl), t.zoom); // このドメインでは以後自動適用
                     // PC幅ページはviewport幅変更後の再フィットが要るのでリロードで確定させる
-                    t.web.reload();
+                    web(t).reload();
                     d.dismiss();
                 })
                 .setNegativeButton("閉じる", null)
@@ -1005,7 +1172,7 @@ public class MainActivity extends Activity {
                 .setTitle("PWAとしてホームに追加")
                 .setMessage((t.pageTitle == null || t.pageTitle.isEmpty() ? t.pageUrl : t.pageTitle)
                         + "\n\nこのサイトをstandaloneアプリ化する？")
-                .setPositiveButton("追加", (d, w) -> PwaInstaller.install(this, t.web, t.pageUrl, t.pageTitle, t.desktop, t.zoom))
+                .setPositiveButton("追加", (d, w) -> PwaInstaller.install(this, web(t), t.pageUrl, t.pageTitle, t.desktop, t.zoom))
                 .setNegativeButton("やめる", null)
                 .show();
     }
@@ -1208,8 +1375,40 @@ public class MainActivity extends Activity {
     }
 
     private void openInCurrent(String url) {
-        WebView w = curWeb();
-        if (w != null) w.loadUrl(url);
+        Tab t = curTab();
+        if (t == null) return;
+        WebView w = web(t);
+        prepareUa(t, url); // 送出前にUAを決める（送出後に直してもサーバは既にモバイル判定済み）
+        w.loadUrl(url);
+    }
+
+    /** これから開くURLのドメインがPC版指定なら、リクエストを出す前にUAを差し替えておく。
+     *  Teamsのように「モバイルUAならエラーページへリダイレクト」するサイトは、
+     *  読み込んでからUAを直しても手遅れで、エラーページを読み直すだけになる。 */
+    private void prepareUa(Tab t, String url) {
+        if (t == null || t.web == null || t.desktop) return;
+        if (!db.isDomainDesktop(hostOf(url))) return;
+        t.desktop = true;
+        t.uaReloadedFor = url; // 直後のonPageStartedで二重に撃たない
+        SnifferChrome.applyUaMode(t.web.getSettings(), true);
+    }
+
+    /** モバイル判定で飛ばされた「非対応ブラウザ」系の袋小路URLか。
+     *  ここに居る時はreloadしても同じページなので、サイトのトップから入り直す必要がある。 */
+    private static boolean isUnsupportedLanding(String url) {
+        if (url == null) return false;
+        String u = url.toLowerCase(java.util.Locale.US);
+        return u.contains("unsupported-browser") || u.contains("unsupportedbrowser")
+                || u.contains("/unsupported");
+    }
+
+    /** そのURLのスキーム+ホストだけを取り出す（袋小路から入り直す先） */
+    private static String originOf(String url) {
+        try {
+            android.net.Uri u = android.net.Uri.parse(url);
+            if (u.getScheme() == null || u.getHost() == null) return null;
+            return u.getScheme() + "://" + u.getHost() + "/";
+        } catch (Throwable e) { return null; }
     }
 
     // ---- WebViewセットアップ（タブごと） ----
@@ -1353,6 +1552,18 @@ public class MainActivity extends Activity {
                 // ドメイン別に保存済みのズームがあれば自動適用（無ければ既定100%へ戻す）
                 t.zoom = domainZoomOrDefault(url);
                 SnifferChrome.applyPageZoom(view, t.zoom);
+                // ドメイン別にPC版指定があればUAを入れ替えて読み直す。
+                // UAはリクエスト送出時に決まるため、モバイルUAで取得済みのこのページは捨てるしかない。
+                // 同一URLで2度目に入った時は再読込しない（リダイレクトとの往復で無限ループになるため）。
+                if (!t.desktop && db.isDomainDesktop(hostOf(url)) && !url.equals(t.uaReloadedFor)) {
+                    t.uaReloadedFor = url;
+                    t.desktop = true;
+                    SnifferChrome.applyUaMode(view.getSettings(), true);
+                    String re = isUnsupportedLanding(url) ? originOf(url) : null;
+                    if (re != null) view.loadUrl(re); // 袋小路ならトップから入り直す
+                    else view.reload();
+                    return;
+                }
                 ad.injectCosmetics(view, url); // 要素隠しCSSを早期注入（描画前に広告枠を潰す）
                 for (String js : UserScripts.get(MainActivity.this).forUrl(url, true))
                     view.evaluateJavascript(js, null);
@@ -1370,6 +1581,16 @@ public class MainActivity extends Activity {
                 OfflineStore.get(MainActivity.this).autoSave(view, db, url, t.pageTitle);
                 for (String js : UserScripts.get(MainActivity.this).forUrl(url, false))
                     view.evaluateJavascript(js, null);
+            }
+            @Override
+            public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
+                // missav等のSPAはpushState/replaceStateで動画ページへ遷移し、onPageStarted/Finishedが
+                // 発火しない（フルナビゲーションではないため）。t.pageUrlが直前の一覧ページ等で
+                // 固着したままだと、動画URLをsniffした際のReferer代替値(Hits.sniff)が間違ったページを
+                // 指し、CDN側のホットリンク判定(Referer検証)に落ちてDLが403で失敗する。
+                // doUpdateVisitedHistoryはSPA遷移でも呼ばれるのでここでも追従させる。
+                t.pageUrl = url;
+                if (t == curTab()) runOnUiThread(() -> { urlBar.setText(url); updateDlBtn(); });
             }
             // 証明書エラーの取り扱い。デフォルト挙動は無言cancel=真っ白なので、
             // WiFiキャプティブポータル（証明書を横取り/自己署名する事が多い）等で
@@ -1477,6 +1698,7 @@ public class MainActivity extends Activity {
                     HlsDownloader.Variant v = vars.get(w - 1);
                     MediaHit h2 = new MediaHit(v.url, "m3u8");
                     h2.referer = h.referer; h2.cookie = h.cookie; h2.ua = h.ua; h2.title = h.title;
+                    h2.page = h.page;
                     h2.quality = v.label();
                     if (v.audioGroup != null)
                         h2.audioUrl = HlsDownloader.findAudioUri(master, h.url, v.audioGroup);
@@ -1491,6 +1713,7 @@ public class MainActivity extends Activity {
         it.putExtra("url", h.url);
         it.putExtra("type", h.type);
         it.putExtra("referer", h.referer);
+        it.putExtra("page", h.page);
         it.putExtra("cookie", h.cookie);
         it.putExtra("ua", h.ua);
         it.putExtra("title", h.title);
@@ -1565,8 +1788,9 @@ public class MainActivity extends Activity {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             Tab t = curTab();
             if (t != null) {
+                if (t.chrome.closePopup()) return true; // 認証ポップアップ表示中
                 if (t.chrome.exitFullscreen()) return true;
-                if (t.web.canGoBack()) { t.web.goBack(); return true; }
+                if (web(t).canGoBack()) { web(t).goBack(); return true; }
                 if (t.external) {
                     // 外部アプリから開いたタブ: 履歴が尽きたらタブを閉じて呼び出し元アプリへ戻る。
                     // タブ閉じの連鎖に入るとアプリへ帰れないので、ここで明示的に抜ける。

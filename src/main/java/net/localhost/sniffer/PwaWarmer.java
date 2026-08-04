@@ -31,6 +31,11 @@ import java.util.LinkedHashSet;
 public class PwaWarmer {
     private static final String TAG = "PwaWarmer";
     private static final long COOLDOWN_MS = 24L * 3600 * 1000;
+    /**
+     * 巡回が完走しなかった場合の再試行間隔。COOLDOWN_MSは完走時のみ打つので、
+     * これが無いと失敗が続く間ずっと毎起動で巡回を試みて電池と通信を焼く。
+     */
+    private static final long RETRY_COOLDOWN_MS = 1L * 3600 * 1000;
     private static final long DWELL_MS = 12_000;   // onPageFinished後、SWのinstall/precacheを待つ猶予
     private static final long TIMEOUT_MS = 35_000; // onPageFinishedが来ない場合の保険
     private static boolean running;
@@ -38,7 +43,9 @@ public class PwaWarmer {
     /** 24hクールダウン付き巡回。MainActivity起動時に呼ぶ */
     static void maybeWarm(Context ctx) {
         SharedPreferences sp = ctx.getSharedPreferences("pwa_warmer", Context.MODE_PRIVATE);
-        if (System.currentTimeMillis() - sp.getLong("last", 0) < COOLDOWN_MS) return;
+        long now = System.currentTimeMillis();
+        if (now - sp.getLong("last", 0) < COOLDOWN_MS) return;
+        if (now - sp.getLong("attempt", 0) < RETRY_COOLDOWN_MS) return;
         warmNow(ctx, null);
     }
 
@@ -54,9 +61,40 @@ public class PwaWarmer {
                 return;
             }
             running = true;
+            // 開始時に打つのは再試行の下限だけ。24hクールダウンは完走時にしか打たない。
+            // 開始時点で"last"を打つ実装だと、巡回が完走しなかった場合（プロセス死・
+            // 圏外化・WebViewの停止など）にスナップショット更新まで24時間止まる。
+            // 実際に2026-07-12から15日間バックアップが更新されず、evict時に15日分巻き戻った。
             app.getSharedPreferences("pwa_warmer", Context.MODE_PRIVATE)
-                    .edit().putLong("last", System.currentTimeMillis()).apply();
+                    .edit().putLong("attempt", System.currentTimeMillis()).apply();
             Log.i(TAG, "warm start: " + urls.size() + " PWAs");
+            new Session(app, urls, () -> {
+                app.getSharedPreferences("pwa_warmer", Context.MODE_PRIVATE)
+                        .edit().putLong("last", System.currentTimeMillis()).apply();
+                // 巡回直後＝全PWAのキャッシュが健全な状態なのでスナップショット更新の好機
+                SwBackup.maybeBackup(app);
+                if (done != null) done.run();
+            }).next();
+        });
+    }
+
+    /**
+     * PwaScheduler（PWA個別のスケジュール実行）向け: 1件だけ巡回して再ウォームする。
+     * 全体巡回とWebViewの同時使用を避けるためrunningガードを共有するが、
+     * クールダウン("last")やSwBackupスナップショット更新は全体巡回専用なので触らない。
+     */
+    static void warmOne(Context ctx, String url, Runnable done) {
+        final Context app = ctx.getApplicationContext();
+        new Handler(Looper.getMainLooper()).post(() -> {
+            if (running || url == null || url.isEmpty() || !isOnline(app)) {
+                Log.i(TAG, "warmOne skip: running=" + running + " online=" + isOnline(app) + " url=" + url);
+                if (done != null) done.run();
+                return;
+            }
+            running = true;
+            ArrayList<String> urls = new ArrayList<>();
+            urls.add(url);
+            Log.i(TAG, "warmOne start: " + url);
             new Session(app, urls, done).next();
         });
     }
@@ -80,7 +118,7 @@ public class PwaWarmer {
         return new ArrayList<>(out);
     }
 
-    private static boolean isOnline(Context ctx) {
+    static boolean isOnline(Context ctx) {
         try {
             ConnectivityManager cm = (ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
             NetworkInfo ni = cm.getActiveNetworkInfo();
@@ -143,8 +181,6 @@ public class PwaWarmer {
             } catch (Throwable ignore) {}
             web = null;
             running = false;
-            // 巡回直後＝全PWAのキャッシュが健全な状態なのでスナップショット更新の好機
-            SwBackup.maybeBackup(app);
             if (done != null) done.run();
         }
     }

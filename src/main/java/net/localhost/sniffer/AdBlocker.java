@@ -306,43 +306,60 @@ public class AdBlocker {
         final Map<String, Set<String>> unhide = new HashMap<>();
     }
 
-    /** シード+DLリスト+カスタムフィルターを読み直して差し替える */
+    /** シード+DLリスト+カスタムフィルターを読み直して差し替える。
+     *  非同期スレッドから呼ばれるため、内部で例外を握り潰さないとAndroidの既定挙動で
+     *  アプリプロセスごと落ちる（未捕捉例外はメインスレッド以外でも全体クラッシュになる）。
+     *  ディスク逼迫時のBrowserDb(SQLite)失敗等でadblockが丸ごと死ぬ事故を防ぐため、
+     *  各段階を個別にtry/catchし、失敗しても取れた分（SEED等）は必ず反映する。 */
     public synchronized void reload() {
-        Acc acc = new Acc();
-        acc.domains.addAll(Arrays.asList(SEED));
-        parseFile(legacyListFile(), acc); // 旧単一ファイル（280blocker）互換
-        File[] files = filterDir().listFiles();
-        if (files != null) for (File f : files) parseFile(f, acc);
+        try {
+            Acc acc = new Acc();
+            acc.domains.addAll(Arrays.asList(SEED));
+            try {
+                parseFile(legacyListFile(), acc); // 旧単一ファイル（280blocker）互換
+                File[] files = filterDir().listFiles();
+                if (files != null) for (File f : files) parseFile(f, acc);
+            } catch (Throwable t) {
+                Log.e("AdBlock", "フィルターファイル解析失敗", t);
+            }
 
-        List<String> c;
-        try (BrowserDb db = new BrowserDb(app)) {
-            c = db.listFilterPatterns();
+            List<String> c = new ArrayList<>();
+            try (BrowserDb db = new BrowserDb(app)) {
+                c.addAll(db.listFilterPatterns());
+            } catch (Throwable t) {
+                Log.e("AdBlock", "カスタムフィルターDB読み込み失敗", t);
+            }
+            c.addAll(Arrays.asList(PATTERN_SEED));
+
+            // 汎用セレクタ: グローバル除外(#@#)を差し引き、上限で切ってCSSを事前連結
+            List<String> gen = new ArrayList<>();
+            for (String s : acc.generic) {
+                if (acc.genericUnhide.contains(s)) continue;
+                gen.add(s);
+                if (gen.size() >= MAX_GENERIC) break;
+            }
+            int siteCount = 0;
+            for (List<String> v : acc.site.values()) siteCount += v.size();
+
+            domains = acc.domains;
+            customs = c;
+            genericSel = gen;
+            genericCss = buildCss(gen);
+            genericJs = null; // 次回注入時に再キャッシュ
+            siteSel = acc.site;
+            siteUnhide = acc.unhide;
+            cosmeticCount = gen.size() + siteCount;
+            Log.i("AdBlock", "reload: domains=" + acc.domains.size()
+                    + " generic=" + gen.size() + " site=" + siteCount);
+            Dbg.log(app, "AdBlock reload: domains=" + acc.domains.size()
+                    + " generic=" + gen.size() + " site=" + siteCount
+                    + " customs=" + c.size());
+        } catch (Throwable t) {
+            // ここに来るのはSEED追加すら失敗するレベルの異常事態のみだが、
+            // 非同期スレッドの未捕捉例外はプロセス全体クラッシュに直結するので必ず捕まえる
+            Log.e("AdBlock", "reload失敗", t);
+            Dbg.log(app, "AdBlock reload失敗: " + t);
         }
-        c.addAll(Arrays.asList(PATTERN_SEED));
-
-        // 汎用セレクタ: グローバル除外(#@#)を差し引き、上限で切ってCSSを事前連結
-        List<String> gen = new ArrayList<>();
-        for (String s : acc.generic) {
-            if (acc.genericUnhide.contains(s)) continue;
-            gen.add(s);
-            if (gen.size() >= MAX_GENERIC) break;
-        }
-        int siteCount = 0;
-        for (List<String> v : acc.site.values()) siteCount += v.size();
-
-        domains = acc.domains;
-        customs = c;
-        genericSel = gen;
-        genericCss = buildCss(gen);
-        genericJs = null; // 次回注入時に再キャッシュ
-        siteSel = acc.site;
-        siteUnhide = acc.unhide;
-        cosmeticCount = gen.size() + siteCount;
-        Log.i("AdBlock", "reload: domains=" + acc.domains.size()
-                + " generic=" + gen.size() + " site=" + siteCount);
-        Dbg.log(app, "AdBlock reload: domains=" + acc.domains.size()
-                + " generic=" + gen.size() + " site=" + siteCount
-                + " customs=" + c.size());
     }
 
     private static void parseFile(File f, Acc acc) {

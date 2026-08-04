@@ -22,8 +22,14 @@ import java.io.OutputStream;
  * 登録DB消失）を検知したらネット不要で書き戻す。バックアップはChromiumのクォータ管理外
  * なのでevict対象にならない。
  *
- * IndexedDBはオリジン名ディレクトリ単位で「消えているものだけ」追加復元する
- * （現存データをstaleなバックアップで上書きしない）。
+ * IndexedDBはオリジン名ディレクトリ単位で「消えているもの＋空で作り直されたもの」だけ
+ * 追加復元する（中身のある現存データをstaleなバックアップで上書きしない）。
+ * evict後にPWAが先に起動すると空DBが作り直されてディレクトリ自体は存在するため、
+ * 「存在するか」ではなく「.ldbを1つでも持つか」で実体の有無を判定する。
+ *
+ * バックアップはIndexedDBのみオリジン単位のマージ方式。SWキャッシュがevictで痩せた状態を
+ * 「不健全」として全体を止めると、一度evictされた後は二度とバックアップが更新されなくなる
+ * （自己ロック）ため、SWスナップショットの可否とIndexedDBの更新可否は切り離す。
  *
  * 復元はWebView初期化前に走る必要があるため、App.onCreate（メインプロセスのみ）から呼ぶ。
  */
@@ -50,28 +56,79 @@ public class SwBackup {
         return ls != null && ls.length > 0;
     }
 
+    /**
+     * leveldbディレクトリが実体を持つか。evict後にPWAが起動して作り直された直後のDBは
+     * CURRENT/MANIFEST/LOGと空の.logだけを持ち、.ldb（実データのsstable）が存在しない。
+     */
+    private static boolean hasLdb(File originDir) {
+        File[] ls = originDir.listFiles();
+        if (ls == null) return false;
+        for (File f : ls) if (f.getName().endsWith(".ldb")) return true;
+        return false;
+    }
+
+    /**
+     * オリジンディレクトリが実データを持つか。
+     * IndexedDBは "<origin>.indexeddb.leveldb"（本体）と "<origin>.indexeddb.blob"（添付の実体）の
+     * 2本立てで、blob側は.ldbを持たないのでファイルの有無で判定する。
+     */
+    private static boolean hasContent(File originDir) {
+        if (!originDir.isDirectory()) return false;
+        if (originDir.getName().endsWith(".blob")) return sizeRec(originDir) > 0;
+        return hasLdb(originDir);
+    }
+
+    /**
+     * 上書き前の退避先。復元が唯一の痕跡を消さないための保険。
+     * 退避対象は「空で作り直されたDB」なので実質数十KBだが、逼迫時の保険が逼迫要因に
+     * ならないよう世代を絞る。
+     */
+    private static final int MAX_QUARANTINE_GENS = 3;
+
+    private static void pruneQuarantine(Context ctx) {
+        File[] gens = new File(ctx.getFilesDir(), "sw_evicted").listFiles();
+        if (gens == null || gens.length <= MAX_QUARANTINE_GENS) return;
+        java.util.Arrays.sort(gens, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+        for (int i = MAX_QUARANTINE_GENS; i < gens.length; i++) deleteRec(gens[i]);
+    }
+
     /** evict痕跡があればバックアップから復元。WebView初期化前に同期で呼ぶこと。 */
     static void maybeRestore(Context ctx) {
         try {
             File bakSw = new File(backupRoot(ctx), "Service Worker");
             if (!hasDb(bakSw)) return; // バックアップ無し
+            long t0 = System.currentTimeMillis();
             File curSw = new File(profileDir(ctx), "Service Worker");
             int cur = cacheOrigins(curSw), bak = cacheOrigins(bakSw);
-            boolean damaged = !hasDb(curSw) || cur < bak;
-            if (!damaged) return;
-            Log.w(TAG, "evict検知: 復元開始 (origins " + cur + " → " + bak + ")");
-            long t0 = System.currentTimeMillis();
-            deleteRec(curSw);
-            copyRec(bakSw, curSw);
-            // IndexedDB: 消えたオリジンのディレクトリだけ追加復元（現存は触らない）
+            if (!hasDb(curSw) || cur < bak) {
+                Log.w(TAG, "evict検知(SW): 復元開始 (origins " + cur + " → " + bak + ")");
+                deleteRec(curSw);
+                copyRec(bakSw, curSw);
+            }
+            // IndexedDB: 消えたオリジン＋空で作り直されたオリジンを復元（実体のある現存は触らない）
             File bakIdb = new File(backupRoot(ctx), "IndexedDB");
             File curIdb = new File(profileDir(ctx), "IndexedDB");
             File[] ls = bakIdb.listFiles();
+            int restored = 0;
+            File qDir = new File(ctx.getFilesDir(), "sw_evicted/" + t0);
             if (ls != null) for (File f : ls) {
+                if (!hasContent(f)) continue;                  // 中身の無いバックアップでは上書きしない
                 File dst = new File(curIdb, f.getName());
-                if (!dst.exists()) copyRec(f, dst);
+                if (hasContent(dst)) continue;                 // 実体があるなら現存を優先
+                if (dst.exists()) {
+                    // 空で作り直された痕跡は捨てずに退避してから差し替える
+                    //noinspection ResultOfMethodCallIgnored
+                    qDir.mkdirs();
+                    if (!dst.renameTo(new File(qDir, f.getName()))) deleteRec(dst);
+                }
+                copyRec(f, dst);
+                restored++;
+                Log.w(TAG, "evict検知(IndexedDB): 復元 " + f.getName());
             }
-            Log.w(TAG, "復元完了 " + (System.currentTimeMillis() - t0) + "ms");
+            if (restored > 0 || cur < bak) {
+                pruneQuarantine(ctx);
+                Log.w(TAG, "復元完了 " + (System.currentTimeMillis() - t0) + "ms idb=" + restored);
+            }
         } catch (Throwable t) {
             Log.e(TAG, "restore失敗: " + t);
         }
@@ -84,28 +141,49 @@ public class SwBackup {
             try {
                 SharedPreferences sp = app.getSharedPreferences("sw_backup", Context.MODE_PRIVATE);
                 if (System.currentTimeMillis() - sp.getLong("last", 0) < BACKUP_COOLDOWN_MS) return;
-                File curSw = new File(profileDir(app), "Service Worker");
-                File root = backupRoot(app);
-                File bakSw = new File(root, "Service Worker");
-                // 現在が後退している（evict直後等）状態を正としてスナップショットしない
-                if (!hasDb(curSw) || cacheOrigins(curSw) < cacheOrigins(bakSw)) {
-                    Log.i(TAG, "backupスキップ: 現状が不健全");
-                    return;
-                }
-                if (sizeRec(curSw) > MAX_BACKUP_BYTES) {
-                    Log.w(TAG, "backupスキップ: サイズ超過");
-                    return;
-                }
                 long t0 = System.currentTimeMillis();
-                File tmp = new File(app.getFilesDir(), "sw_backup.tmp");
-                deleteRec(tmp);
-                copyRec(curSw, new File(tmp, "Service Worker"));
+                File root = backupRoot(app);
+                //noinspection ResultOfMethodCallIgnored
+                root.mkdirs();
+                File curSw = new File(profileDir(app), "Service Worker");
+                File bakSw = new File(root, "Service Worker");
+
+                // --- Service Worker: 現在が後退している（evict直後等）なら据え置き ---
+                // ここで打ち切らずIndexedDBへ進むこと。一度evictされると二度と
+                // バックアップが更新されない自己ロックを避ける。
+                if (!hasDb(curSw) || cacheOrigins(curSw) < cacheOrigins(bakSw)) {
+                    Log.i(TAG, "SWスナップショット据え置き: 現状が不健全 ("
+                            + cacheOrigins(curSw) + " < " + cacheOrigins(bakSw) + ")");
+                } else if (sizeRec(curSw) > MAX_BACKUP_BYTES) {
+                    Log.w(TAG, "SWスナップショット据え置き: サイズ超過");
+                } else {
+                    File tmp = new File(app.getFilesDir(), "sw_backup.tmp");
+                    deleteRec(tmp);
+                    copyRec(curSw, tmp);
+                    deleteRec(bakSw);
+                    if (!tmp.renameTo(bakSw)) { deleteRec(tmp); Log.e(TAG, "SW rename失敗"); }
+                }
+
+                // --- IndexedDB: オリジン単位のマージ更新 ---
+                // 実体(.ldb)を持つオリジンだけ差し替える。現行から消えたオリジンの
+                // バックアップは残す（evictされただけかもしれないため）。
+                int updated = 0;
                 File curIdb = new File(profileDir(app), "IndexedDB");
-                if (curIdb.isDirectory()) copyRec(curIdb, new File(tmp, "IndexedDB"));
-                deleteRec(root);
-                if (!tmp.renameTo(root)) { Log.e(TAG, "backup rename失敗"); return; }
+                File bakIdb = new File(root, "IndexedDB");
+                File[] origins = curIdb.listFiles();
+                if (origins != null) for (File o : origins) {
+                    if (!hasContent(o)) continue;
+                    File dst = new File(bakIdb, o.getName());
+                    File tmp = new File(bakIdb, o.getName() + ".tmp");
+                    deleteRec(tmp);
+                    copyRec(o, tmp);
+                    deleteRec(dst);
+                    if (tmp.renameTo(dst)) updated++;
+                    else { deleteRec(tmp); Log.e(TAG, "idb rename失敗: " + o.getName()); }
+                }
                 sp.edit().putLong("last", System.currentTimeMillis()).apply();
-                Log.i(TAG, "backup完了 " + (System.currentTimeMillis() - t0) + "ms origins=" + cacheOrigins(new File(root, "Service Worker")));
+                Log.i(TAG, "backup完了 " + (System.currentTimeMillis() - t0) + "ms sw_origins="
+                        + cacheOrigins(bakSw) + " idb_updated=" + updated);
             } catch (Throwable t) {
                 Log.e(TAG, "backup失敗: " + t);
             }

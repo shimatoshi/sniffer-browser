@@ -45,6 +45,14 @@ public class Hits {
 
     public static int countFor(String pageUrl) { return forPage(pageUrl).size(); }
 
+    private static String headerCI(Map<String, String> hdr, String key) {
+        String v = hdr.get(key);
+        if (v != null) return v;
+        for (Map.Entry<String, String> e : hdr.entrySet())
+            if (key.equalsIgnoreCase(e.getKey())) return e.getValue();
+        return null;
+    }
+
     private static String hostOf(String url) {
         if (url == null || !url.startsWith("http")) return null;
         try {
@@ -78,9 +86,12 @@ public class Hits {
 
             MediaHit h = new MediaHit(url, type);
             Map<String, String> hdr = req.getRequestHeaders();
-            h.referer = hdr.get("Referer");
+            // WebViewのRequestHeadersはAndroidバージョン/リクエスト種別でキーの大小文字が
+            // 揺れることがある（例: "referer"）。完全一致のgetだけだと拾い損ねて
+            // CDN側のホットリンク判定(Referer検証)に落ちるので大小文字無視で探す
+            h.referer = headerCI(hdr, "Referer");
             if (h.referer == null) h.referer = pageUrl;
-            h.ua = hdr.get("User-Agent");
+            h.ua = headerCI(hdr, "User-Agent");
             if (h.ua == null) h.ua = fallbackUa;
             try { h.cookie = CookieManager.getInstance().getCookie(url); } catch (Throwable ignore) {}
             h.title = pageTitle;

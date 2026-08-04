@@ -11,6 +11,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.WindowManager;
@@ -26,6 +27,8 @@ import android.webkit.WebViewClient;
  *  - フォアグラウンドService → 背面でもLMKに殺されない（Activity版は3aで即kill）
  *  - 画面外(x=-width)のオーバーレイ → ユーザーの別作業を邪魔しない
  *  - VISIBLE維持 → レンダラが動き続けるのでCDPのnavigate/eval/captureScreenshotが効く
+ *  - PARTIAL_WAKE_LOCK保持 → 画面消灯(Doze/Asleep)でもCPUを起こし続け、外部からのadb画面起こしに頼らず
+ *    バックグラウンドのままnavigate/evalが効くようにする（画面は点けない＝ユーザー作業は邪魔しない）
  *
  * 外部からはCDP(devtools socket)経由でcdp.pyが駆動する。このServiceは「殺されない器」を提供するだけ。
  */
@@ -33,12 +36,29 @@ public class HeadlessBrowserService extends Service {
 
     private static final String CH = "headless";
     private static final int NID = 7777;
+    private static final long WAKE_LOCK_TIMEOUT_MS = 30 * 60 * 1000L; // 万一解放漏れしても30分で自然失効する安全弁
     public static final String ACTION_STOP = "net.localhost.sniffer.HEADLESS_STOP";
     public static final String ACTION_WARM = "net.localhost.sniffer.WARM_PWAS";
+    public static final String ACTION_WARM_ONE = "net.localhost.sniffer.WARM_ONE_PWA";
 
     private WebView web;
     private WindowManager wm;
+    private PowerManager.WakeLock wakeLock;
     private final Handler ui = new Handler(Looper.getMainLooper());
+
+    private void acquireWakeLock() {
+        if (wakeLock == null) {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Sniffer:HeadlessBrowser");
+            wakeLock.setReferenceCounted(false);
+        }
+        // acquire(timeout)は毎回呼んでも良い（保持中なら期限を延長するだけ）
+        wakeLock.acquire(WAKE_LOCK_TIMEOUT_MS);
+    }
+
+    private void releaseWakeLock() {
+        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+    }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -47,6 +67,7 @@ public class HeadlessBrowserService extends Service {
             // RemoteServiceException（5秒ルール違反）でプロセスごとクラッシュする
             ensureChannel();
             startForeground(NID, build());
+            releaseWakeLock();
             stopForeground(true);
             stopSelf();
             return START_NOT_STICKY;
@@ -56,13 +77,25 @@ public class HeadlessBrowserService extends Service {
             // プロセスを守り、ヘッドレス本体が動いていなければ終了時に畳む
             ensureChannel();
             startForeground(NID, build());
+            acquireWakeLock();
             PwaWarmer.warmNow(this, () -> {
-                if (web == null) { stopForeground(true); stopSelf(); }
+                if (web == null) { releaseWakeLock(); stopForeground(true); stopSelf(); }
+            });
+            return START_NOT_STICKY;
+        }
+        if (intent != null && ACTION_WARM_ONE.equals(intent.getAction())) {
+            // PwaScheduler（PWA個別スケジュール）が定刻オンライン時に呼ぶ単発ウォーム
+            ensureChannel();
+            startForeground(NID, build());
+            acquireWakeLock();
+            PwaWarmer.warmOne(this, intent.getStringExtra("url"), () -> {
+                if (web == null) { releaseWakeLock(); stopForeground(true); stopSelf(); }
             });
             return START_NOT_STICKY;
         }
         ensureChannel();
         startForeground(NID, build());
+        acquireWakeLock();
 
         if (web == null) ui.post(() -> setupWeb(
                 intent != null ? intent.getStringExtra("url") : null));
@@ -160,6 +193,7 @@ public class HeadlessBrowserService extends Service {
 
     @Override
     public void onDestroy() {
+        releaseWakeLock();
         if (web != null && wm != null) {
             try { wm.removeView(web); } catch (Throwable ignore) {}
             web.destroy();

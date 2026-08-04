@@ -228,6 +228,12 @@ public class PwaActivity extends Activity {
                 for (String js : UserScripts.get(PwaActivity.this).forUrl(url, false))
                     view.evaluateJavascript(js, null);
             }
+            @Override
+            public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
+                // SPAのpushState遷移はonPageStarted/Finishedが発火しない→pageUrlが固着し、
+                // Hits.sniffのReferer代替値が古いページを指してCDNのホットリンク判定に落ちる
+                pageUrl = url;
+            }
         });
 
         chrome = new SnifferChrome(this, web) {
@@ -447,6 +453,7 @@ public class PwaActivity extends Activity {
                 closeBrowseOverlay();
                 return true;
             }
+            if (chrome != null && chrome.closePopup()) return true; // 認証ポップアップ表示中
             if (chrome != null && chrome.exitFullscreen()) return true;
             if (web.canGoBack()) { web.goBack(); return true; }
         }
