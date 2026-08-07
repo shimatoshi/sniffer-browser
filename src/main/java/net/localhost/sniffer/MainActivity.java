@@ -210,7 +210,12 @@ public class MainActivity extends Activity {
         btnTabs.setOnClickListener(v -> showTabs());
         findViewById(R.id.btnMenu).setOnClickListener(this::showMenu);
 
-        urlBar.setSelectAllOnFocus(true);
+        // Chromeのアドレス欄と同じく、タップして編集を始めたら現在URLを消す。
+        // フォーカス中はページ遷移コールバックで表示を上書きしない。
+        urlBar.setSelectAllOnFocus(false);
+        urlBar.setOnFocusChangeListener((v, focused) -> {
+            if (focused) urlBar.setText("");
+        });
         urlBar.setOnEditorActionListener((v, actionId, ev) -> {
             if (actionId == EditorInfo.IME_ACTION_GO ||
                     (ev != null && ev.getKeyCode() == KeyEvent.KEYCODE_ENTER)) {
@@ -252,7 +257,7 @@ public class MainActivity extends Activity {
     private void focusUrlBar() {
         urlBar.post(() -> {
             urlBar.requestFocus();
-            urlBar.selectAll();
+            urlBar.setSelection(0);
             android.view.inputmethod.InputMethodManager imm =
                     (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
             if (imm != null) imm.showSoftInput(urlBar, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
@@ -398,7 +403,7 @@ public class MainActivity extends Activity {
         }
         String u = w.getUrl();
         if (u == null) u = t.pendingUrl;
-        urlBar.setText(u != null ? u : "");
+        setUrlBar(u != null ? u : "");
         progress.setVisibility(View.GONE);
         updateTabBtn();
         updateDlBtn();
@@ -581,7 +586,7 @@ public class MainActivity extends Activity {
         // 平文HTTPの軽量probe。ポータル配下では302でログイン画面へリダイレクトされる。
         String probe = "http://captive.apple.com/hotspot-detect.html";
         web(t).loadUrl(probe);
-        if (t == curTab()) urlBar.setText(probe);
+        if (t == curTab()) setUrlBar(probe);
         Toast.makeText(this, "WiFiログイン画面を呼び出し中…", Toast.LENGTH_SHORT).show();
     }
 
@@ -589,7 +594,7 @@ public class MainActivity extends Activity {
 
     private void goHome(Tab t, boolean force) {
         web(t).loadUrl(HOME);
-        if (t == curTab()) urlBar.setText(HOME);
+        if (t == curTab()) setUrlBar(HOME);
     }
 
     /** ホーム内リンク gobie://search?q=... （旧ホームのpwa-open等も互換で残す） */
@@ -1469,7 +1474,7 @@ public class MainActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap f) {
                 t.pageUrl = url;
-                if (t == curTab()) runOnUiThread(() -> { urlBar.setText(url); updateDlBtn(); });
+                if (t == curTab()) runOnUiThread(() -> { setUrlBar(url); updateDlBtn(); });
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
                 ClickTracker.inject(view); // クリック地点記録（リダイレクトブロック判定用）
                 SnifferChrome.injectYoutubeAdblock(view, url); // YouTube動画内広告の除去(早期注入でJSON.parseフック)
@@ -1515,7 +1520,7 @@ public class MainActivity extends Activity {
                 // 指し、CDN側のホットリンク判定(Referer検証)に落ちてDLが403で失敗する。
                 // doUpdateVisitedHistoryはSPA遷移でも呼ばれるのでここでも追従させる。
                 t.pageUrl = url;
-                if (t == curTab()) runOnUiThread(() -> { urlBar.setText(url); updateDlBtn(); });
+                if (t == curTab()) runOnUiThread(() -> { setUrlBar(url); updateDlBtn(); });
             }
             // 証明書エラーの取り扱い。デフォルト挙動は無言cancel=真っ白なので、
             // WiFiキャプティブポータル（証明書を横取り/自己署名する事が多い）等で
@@ -1662,8 +1667,23 @@ public class MainActivity extends Activity {
         return (i >= 0 && i < ENGINES.length) ? i : 0;
     }
 
+    /** ページ側のURL更新。ユーザーが入力中なら、その入力を絶対に上書きしない。 */
+    private void setUrlBar(String url) {
+        if (urlBar == null || urlBar.hasFocus()) return;
+        urlBar.setText(url != null ? url : "");
+    }
+
     private void go(String q) {
+        q = q == null ? "" : q.trim();
+        if (q.isEmpty()) return;
         String url;
+        // IME/コピペ起因でスキームのコロンだけ落ちる入力(https//example.com)を
+        // 素のドメインと誤認して "https://" を二重付加しないよう先に補正する
+        if (q.matches("(?i)^ht{3}ps?://.*")) {
+            // よくある入力ミス(htttp/htttps)を、意図したスキームへ戻す。
+            q = q.replaceFirst("(?i)^ht+tps?://", q.toLowerCase(java.util.Locale.US).startsWith("htttps") ? "https://" : "http://");
+        } else if (q.matches("(?i)^https?//.*")) q = q.replaceFirst("(?i)^(https?)//", "$1://");
+        else if (q.matches("(?i)^https?:/[^/].*")) q = q.replaceFirst("(?i)^(https?):/", "$1://");
         if (q.matches("(?i)^https?://.*")) url = q;
         else if (q.contains(".") && !q.contains(" ")) url = "https://" + q;
         else {
