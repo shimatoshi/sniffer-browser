@@ -51,27 +51,29 @@ def has_page():
 
 
 def ensure_bridge(quiet=True):
-    """CDPが応答しなければ bridge.sh で起動・張り直す。
-    応答してもpage targetが無ければServiceを再始動してWebViewを作らせる。"""
-    if not cdp_alive():
+    """Ensure the forwarded port points at the current headless WebView."""
+    # /json/versionだけ生きていても、PID交代後に古い adb forward が
+    # 残っていることがある。headless targetまで確認できなければbridge
+    # を張り直し、現在のWebView devtools socketへ追従する。
+    alive = cdp_alive()
+    page = has_page() if alive else False
+    if not alive or not page:
+        # bridge.sh starts the service when the package is not running.  If
+        # the package is alive only as the user-facing Activity, start the
+        # headless service here as well; otherwise bridge.sh could preserve a
+        # valid-looking forward that has no headless target behind it.
+        if alive and not page:
+            subprocess.run(
+                [SU, "-c",
+                 f"am start-foreground-service -n {PKG}/.HeadlessBrowserService"
+                 f" --es url about:blank"],
+                capture_output=True)
         r = subprocess.run([BRIDGE], capture_output=True, text=True)
         if not quiet:
             sys.stderr.write(r.stdout + r.stderr)
-        if not cdp_alive():
+        if not cdp_alive() or not has_page():
             sys.exit("error: CDPに接続できない。bridge.sh の出力:\n"
                      + r.stdout + r.stderr)
-    if not has_page():
-        subprocess.run(
-            [SU, "-c",
-             f"am start-foreground-service -n {PKG}/.HeadlessBrowserService"
-             f" --es url about:blank"],
-            capture_output=True)
-        deadline = time.time() + 15
-        while time.time() < deadline:
-            if has_page():
-                return
-            time.sleep(0.5)
-        sys.exit("error: WebView(page target)が出てこない")
 
 
 def connect():

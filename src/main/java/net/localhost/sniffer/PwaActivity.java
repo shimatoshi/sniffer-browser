@@ -74,6 +74,11 @@ public class PwaActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        // 低RAM機でバックグラウンドに回った瞬間LMKに即killされる対策。
+        // HeadlessBrowserServiceの前面サービスに間借りしてこのプロセス全体を延命する
+        // （web/wmには一切触らない、foreground状態だけ共有）
+        HeadlessBrowserService.attachPwa(this);
+
         Intent it = getIntent();
         String url = (it != null && it.getData() != null) ? it.getData().toString() : "about:blank";
         String title = it != null ? it.getStringExtra("pwa_title") : null;
@@ -417,6 +422,7 @@ public class PwaActivity extends Activity {
     protected void onDestroy() {
         closeBrowseOverlay();
         Media.stopPlaybackService(this);
+        HeadlessBrowserService.detachPwa(this);
         super.onDestroy();
     }
 

@@ -40,10 +40,15 @@ public class HeadlessBrowserService extends Service {
     public static final String ACTION_STOP = "net.localhost.sniffer.HEADLESS_STOP";
     public static final String ACTION_WARM = "net.localhost.sniffer.WARM_PWAS";
     public static final String ACTION_WARM_ONE = "net.localhost.sniffer.WARM_ONE_PWA";
+    // PwaActivityが生きている間だけ前面サービスに相乗りしてプロセスをLMKから守る
+    // （このServiceと同一プロセスなので、web/wmは一切触らずforeground状態だけ間借りする）
+    public static final String ACTION_PWA_ATTACH = "net.localhost.sniffer.PWA_ATTACH";
+    public static final String ACTION_PWA_DETACH = "net.localhost.sniffer.PWA_DETACH";
 
     private WebView web;
     private WindowManager wm;
     private PowerManager.WakeLock wakeLock;
+    private int pwaAttachCount = 0;
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     private void acquireWakeLock() {
@@ -60,6 +65,20 @@ public class HeadlessBrowserService extends Service {
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
     }
 
+    // ---- PwaActivity生存中の延命（前面サービスへの相乗り） ----
+
+    public static void attachPwa(Context c) {
+        Intent it = new Intent(c, HeadlessBrowserService.class).setAction(ACTION_PWA_ATTACH);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) c.startForegroundService(it);
+        else c.startService(it);
+    }
+
+    public static void detachPwa(Context c) {
+        try {
+            c.startService(new Intent(c, HeadlessBrowserService.class).setAction(ACTION_PWA_DETACH));
+        } catch (Throwable ignore) {}
+    }
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
@@ -67,9 +86,11 @@ public class HeadlessBrowserService extends Service {
             // RemoteServiceException（5秒ルール違反）でプロセスごとクラッシュする
             ensureChannel();
             startForeground(NID, build());
-            releaseWakeLock();
-            stopForeground(true);
-            stopSelf();
+            if (pwaAttachCount == 0) {
+                releaseWakeLock();
+                stopForeground(true);
+                stopSelf();
+            }
             return START_NOT_STICKY;
         }
         if (intent != null && ACTION_WARM.equals(intent.getAction())) {
@@ -79,7 +100,7 @@ public class HeadlessBrowserService extends Service {
             startForeground(NID, build());
             acquireWakeLock();
             PwaWarmer.warmNow(this, () -> {
-                if (web == null) { releaseWakeLock(); stopForeground(true); stopSelf(); }
+                if (web == null && pwaAttachCount == 0) { releaseWakeLock(); stopForeground(true); stopSelf(); }
             });
             return START_NOT_STICKY;
         }
@@ -89,8 +110,24 @@ public class HeadlessBrowserService extends Service {
             startForeground(NID, build());
             acquireWakeLock();
             PwaWarmer.warmOne(this, intent.getStringExtra("url"), () -> {
-                if (web == null) { releaseWakeLock(); stopForeground(true); stopSelf(); }
+                if (web == null && pwaAttachCount == 0) { releaseWakeLock(); stopForeground(true); stopSelf(); }
             });
+            return START_NOT_STICKY;
+        }
+        if (intent != null && ACTION_PWA_ATTACH.equals(intent.getAction())) {
+            // 表示中のPWAタブ数ぶんカウントするだけ。webは触らずforeground状態だけ間借りする
+            ensureChannel();
+            startForeground(NID, build());
+            pwaAttachCount++;
+            return START_NOT_STICKY;
+        }
+        if (intent != null && ACTION_PWA_DETACH.equals(intent.getAction())) {
+            if (pwaAttachCount > 0) pwaAttachCount--;
+            if (pwaAttachCount == 0 && web == null) {
+                releaseWakeLock();
+                stopForeground(true);
+                stopSelf();
+            }
             return START_NOT_STICKY;
         }
         ensureChannel();
@@ -184,8 +221,11 @@ public class HeadlessBrowserService extends Service {
         Notification.Builder b = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CH)
                 : new Notification.Builder(this);
-        return b.setContentTitle("Headless browser 稼働中")
-                .setContentText("CDPで外部駆動可能 (tcp:9222)")
+        boolean headlessActive = web != null;
+        String title = headlessActive ? "Headless browser 稼働中" : "PWA 表示中";
+        String text = headlessActive ? "CDPで外部駆動可能 (tcp:9222)" : "バックグラウンドでも維持中";
+        return b.setContentTitle(title)
+                .setContentText(text)
                 .setSmallIcon(android.R.drawable.ic_menu_view)
                 .setOngoing(true)
                 .build();

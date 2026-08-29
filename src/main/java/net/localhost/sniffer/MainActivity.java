@@ -210,12 +210,15 @@ public class MainActivity extends Activity {
         btnTabs.setOnClickListener(v -> showTabs());
         findViewById(R.id.btnMenu).setOnClickListener(this::showMenu);
 
-        // Chromeのアドレス欄と同じく、タップして編集を始めたら現在URLを消す。
+        // タップしたら現在URLを全選択状態にする(コピペしやすいように消さない)。
         // フォーカス中はページ遷移コールバックで表示を上書きしない。
         urlBar.setSelectAllOnFocus(false);
         urlBar.setOnFocusChangeListener((v, focused) -> {
-            if (focused) urlBar.setText("");
+            if (focused) urlBar.selectAll();
         });
+        // フォーカス済みの状態での再タップはonFocusChangeが発火せず選択が外れるだけなので、
+        // クリックの度に明示selectAllして常に全選択状態を保証する。
+        urlBar.setOnClickListener(v -> urlBar.selectAll());
         urlBar.setOnEditorActionListener((v, actionId, ev) -> {
             if (actionId == EditorInfo.IME_ACTION_GO ||
                     (ev != null && ev.getKeyCode() == KeyEvent.KEYCODE_ENTER)) {
@@ -257,7 +260,7 @@ public class MainActivity extends Activity {
     private void focusUrlBar() {
         urlBar.post(() -> {
             urlBar.requestFocus();
-            urlBar.setSelection(0);
+            urlBar.selectAll();
             android.view.inputmethod.InputMethodManager imm =
                     (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
             if (imm != null) imm.showSoftInput(urlBar, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
@@ -1710,7 +1713,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         // ファイルピッカーは開いたタブのchromeだけがfileCbを持つので全タブへ中継して問題ない
-        for (Tab t : tabs) t.chrome.onFileResult(requestCode, resultCode, data);
+        // ただしタブ生成中（chrome未設定）の一瞬に結果が届くとNPEになるためnullガード必須
+        for (Tab t : tabs) if (t.chrome != null) t.chrome.onFileResult(requestCode, resultCode, data);
         super.onActivityResult(requestCode, resultCode, data);
     }
 
@@ -1718,7 +1722,7 @@ public class MainActivity extends Activity {
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         // geolocationの権限要求結果を、要求したタブのchromeへ中継する
         if (requestCode == SnifferChrome.REQ_GEO)
-            for (Tab t : tabs) t.chrome.onGeoPermissionResult(requestCode, grantResults);
+            for (Tab t : tabs) if (t.chrome != null) t.chrome.onGeoPermissionResult(requestCode, grantResults);
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
     }
 

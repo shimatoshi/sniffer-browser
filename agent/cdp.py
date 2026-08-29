@@ -102,19 +102,47 @@ class CDP:
             ws_url, timeout=self.timeout, max_size=None, suppress_origin=True)
         return ws
 
+    def _reconnect(self):
+        """Reconnect after the WebView renderer/DevTools socket was replaced.
+
+        HeadlessBrowserService can recreate its WebView (and therefore its
+        abstract devtools socket) without the CLI process noticing.  Resolve
+        the target again instead of reusing the old websocket URL.
+        """
+        try:
+            self.ws.close()
+        except Exception:
+            pass
+        time.sleep(0.2)
+        self.ws = self._connect_page()
+
     def send(self, method, **params):
-        self._id += 1
-        mid = self._id
-        self.ws.send(json.dumps({"id": mid, "method": method, "params": params}))
-        # 自分のidの応答が返るまでイベントを読み飛ばす
-        deadline = time.time() + self.timeout
-        while time.time() < deadline:
-            msg = json.loads(self.ws.recv())
-            if msg.get("id") == mid:
-                if "error" in msg:
-                    raise RuntimeError(f"{method}: {msg['error']}")
-                return msg.get("result", {})
-        raise TimeoutError(f"{method} timeout")
+        # A renderer restart can close the websocket between any two CDP
+        # commands.  Reconnect and retry once.  Do not loop indefinitely:
+        # commands such as click/fill may have reached the page already when
+        # the connection disappeared, so an unbounded retry could duplicate
+        # a side effect.
+        for attempt in range(2):
+            self._id += 1
+            mid = self._id
+            try:
+                self.ws.send(json.dumps({"id": mid, "method": method,
+                                         "params": params}))
+                # 自分のidの応答が返るまでイベントを読み飛ばす
+                deadline = time.time() + self.timeout
+                while time.time() < deadline:
+                    msg = json.loads(self.ws.recv())
+                    if msg.get("id") == mid:
+                        if "error" in msg:
+                            raise RuntimeError(f"{method}: {msg['error']}")
+                        return msg.get("result", {})
+                raise TimeoutError(f"{method} timeout")
+            except (websocket.WebSocketConnectionClosedException,
+                    websocket.WebSocketTimeoutException, OSError,
+                    json.JSONDecodeError):
+                if attempt:
+                    raise
+                self._reconnect()
 
     # --- 高レベル動詞 ---
     def goto(self, url, wait_load=True):
