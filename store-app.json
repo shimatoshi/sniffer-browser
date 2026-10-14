@@ -1,0 +1,14 @@
+{
+  "id": "sniffer-browser",
+  "type": "apk",
+  "app": {
+    "name": "Gobie",
+    "icon": "https://raw.githubusercontent.com/shimatoshi/app-store-releases/main/icons/sniffer-browser.png",
+    "description": "広告ブロック・メディア検出ダウンロード機能付きWebViewブラウザ",
+    "category": "メディア"
+  },
+  "build": {
+    "recipe": "sniffer",
+    "manifest": "src/main/AndroidManifest.xml"
+  }
+}

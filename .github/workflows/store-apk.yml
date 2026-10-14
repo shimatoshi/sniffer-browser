@@ -1,0 +1,23 @@
+name: Store APK release
+on:
+  push:
+    branches: [master]
+    paths-ignore: ['**/*.md']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'APK versionName (empty = base version + build number)'
+        type: string
+        default: ''
+permissions:
+  contents: write
+jobs:
+  release:
+    uses: shimatoshi/app-store-releases/.github/workflows/release-apk.yml@ca3e3ae491b898cf5b476c311a3c3ee65a755fcd
+    with:
+      version: ${{ inputs.version || '' }}
+    secrets:
+      STORE_SIGNING_KEYSTORE_BASE64: ${{ secrets.STORE_SIGNING_KEYSTORE_BASE64 }}
+      STORE_KEYSTORE_PASSWORD: ${{ secrets.STORE_KEYSTORE_PASSWORD }}
+      STORE_KEY_PASSWORD: ${{ secrets.STORE_KEY_PASSWORD }}
+      STORE_KEY_ALIAS: ${{ secrets.STORE_KEY_ALIAS }}
