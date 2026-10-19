@@ -246,8 +246,11 @@ public class BrowserDb extends SQLiteOpenHelper {
         v.put("desktop", desktop ? 1 : 0);
         v.put("zoom", zoom > 0 ? zoom : 100);
         v.put("ts", System.currentTimeMillis());
-        getWritableDatabase().insertWithOnConflict(
-                "pwas", null, v, SQLiteDatabase.CONFLICT_REPLACE);
+        // REPLACEだと行ごと作り直されて id が変わり、schedule/queue_offline も初期化されて
+        // 定期取得のアラーム紐付けが壊れる。既存行はUPDATEで残りの列を保持する
+        SQLiteDatabase db = getWritableDatabase();
+        if (db.update("pwas", v, "url=?", new String[]{url}) == 0)
+            db.insert("pwas", null, v);
     }
 
     /** 既存ショートカットからのバックフィル用。すでに登録済みなら触らない（実アイコンを潰さない）。 */

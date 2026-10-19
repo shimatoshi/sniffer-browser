@@ -4,7 +4,6 @@ import android.content.Context;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.util.AttributeSet;
-import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -54,7 +53,6 @@ public class PullRefreshContainer extends FrameLayout {
         spinner.setLayoutParams(lp);
         spinner.setVisibility(GONE);
         addView(spinner);
-        Log.i("PullRefresh", "PullRefreshContainer constructed");
     }
 
     public void setOnRefreshListener(OnRefreshListener l) { listener = l; }
@@ -88,15 +86,7 @@ public class PullRefreshContainer extends FrameLayout {
     }
 
     @Override
-    public boolean dispatchTouchEvent(MotionEvent e) {
-        Log.i("PullRefresh", "dispatch action=" + e.getActionMasked() + " y=" + e.getY());
-        return super.dispatchTouchEvent(e);
-    }
-
-    @Override
     public boolean onInterceptTouchEvent(MotionEvent e) {
-        Log.i("PullRefresh", "onIntercept action=" + e.getActionMasked()
-                + " refreshing=" + refreshing + " listener=" + (listener != null));
         if (refreshing || listener == null) return false;
         switch (e.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
@@ -105,9 +95,6 @@ public class PullRefreshContainer extends FrameLayout {
                 break;
             case MotionEvent.ACTION_MOVE:
                 View t = target();
-                float dy0 = e.getY() - startY;
-                Log.i("PullRefresh", "intercept MOVE dy=" + dy0 + " target=" + t
-                        + " canUp=" + (t != null && t.canScrollVertically(-1)));
                 // 最上部（これ以上上にスクロールできない）かつ下方向ドラッグのみ捕捉
                 if (t != null && !t.canScrollVertically(-1)) {
                     float dy = e.getY() - startY;

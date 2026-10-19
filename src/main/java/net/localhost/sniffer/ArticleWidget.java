@@ -71,14 +71,16 @@ public class ArticleWidget extends AppWidgetProvider {
         final PendingResult pr = goAsync();
         final Context app = ctx.getApplicationContext();
         new Thread(() -> {
+            BrowserDb db = null;
             try {
-                BrowserDb db = new BrowserDb(app);
+                db = new BrowserDb(app);
                 List<BrowserDb.Entry> pins = db.listPins();
                 String ua = "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/120 Mobile";
                 List<BrowserDb.FeedItem> items = HomePage.collectAll(pins, ua);
                 db.replaceFeed(items);
             } catch (Throwable ignore) {
             } finally {
+                if (db != null) db.close();
                 AppWidgetManager m = AppWidgetManager.getInstance(app);
                 int[] live = m.getAppWidgetIds(new ComponentName(app, ArticleWidget.class));
                 m.notifyAppWidgetViewDataChanged(live, R.id.articleList);

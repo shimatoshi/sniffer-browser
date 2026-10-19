@@ -112,6 +112,7 @@ public class SwBackup {
             int restored = 0;
             File qDir = new File(ctx.getFilesDir(), "sw_evicted/" + t0);
             if (ls != null) for (File f : ls) {
+                if (f.getName().endsWith(".tmp")) continue;     // バックアップ中断の残骸は復元しない
                 if (!hasContent(f)) continue;                  // 中身の無いバックアップでは上書きしない
                 File dst = new File(curIdb, f.getName());
                 if (hasContent(dst)) continue;                 // 実体があるなら現存を優先

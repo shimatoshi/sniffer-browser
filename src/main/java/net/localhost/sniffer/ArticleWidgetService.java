@@ -27,10 +27,14 @@ public class ArticleWidgetService extends RemoteViewsService {
         @Override public void onDestroy() { items.clear(); }
 
         private void reload() {
+            BrowserDb db = null;
             try {
-                items = new BrowserDb(ctx).listFeed();
+                db = new BrowserDb(ctx);
+                items = db.listFeed();
             } catch (Throwable e) {
                 items = new ArrayList<>();
+            } finally {
+                if (db != null) db.close(); // reloadの度に接続を残さない
             }
         }
 

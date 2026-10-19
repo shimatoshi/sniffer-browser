@@ -143,6 +143,7 @@ public class AdBlocker {
     /** ブロック対象なら空レスポンス、素通しなら null */
     public WebResourceResponse shouldBlock(Uri uri) {
         if (!adblockOn() || uri == null) return null;
+        if (isChallenge(uri)) return null;
         Set<String> d = domains;
         String h = uri.getHost();
         while (h != null && !h.isEmpty()) {
@@ -158,6 +159,21 @@ public class AdBlocker {
                 if (!p.isEmpty() && s.contains(p)) return empty(p);
         }
         return null;
+    }
+
+    /**
+     * Cloudflareのbot判定(JSチャレンジ/Turnstile)は、スクリプトや検証リクエストが
+     * 1つでも落ちると通らず無限に再チャレンジになる。外部フィルターリストが
+     * これらを誤ブロックしても確実に通すため、判定より先に素通しする。
+     */
+    private static boolean isChallenge(Uri uri) {
+        String h = uri.getHost();
+        if (h != null && (h.equals("challenges.cloudflare.com")
+                || h.endsWith(".challenges.cloudflare.com"))) return true;
+        String p = uri.getPath();
+        return p != null && (p.startsWith("/cdn-cgi/challenge-platform/")
+                || p.startsWith("/cdn-cgi/challenge")
+                || p.startsWith("/cdn-cgi/l/chk_"));
     }
 
     private WebResourceResponse empty(String why) {
@@ -525,13 +541,17 @@ public class AdBlocker {
             if (con.getResponseCode() != 200)
                 throw new IOException("HTTP " + con.getResponseCode() + " " + su);
             File tmp = new File(out.getPath() + ".tmp");
+            boolean ok = false;
             try (InputStream in = con.getInputStream();
                  FileOutputStream fos = new FileOutputStream(tmp)) {
                 byte[] buf = new byte[8192];
                 int n;
                 while ((n = in.read(buf)) > 0) fos.write(buf, 0, n);
+                ok = true;
+            } finally {
+                if (!ok) tmp.delete(); // 途中失敗の中途半端な.tmpを残さない
             }
-            if (!tmp.renameTo(out)) throw new IOException("rename失敗");
+            if (!tmp.renameTo(out)) { tmp.delete(); throw new IOException("rename失敗"); }
         } finally {
             if (con != null) con.disconnect();
         }

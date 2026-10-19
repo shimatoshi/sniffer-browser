@@ -73,10 +73,14 @@ public class PwaInstaller {
         final String fName = name, fStart = start, fTheme = theme;
         final Bitmap fIcon = icon != null ? fitIcon(icon) : letterIcon(name);
         // ブラウザホームに並べるため台帳へ保存（start_url一意・アイコン込み）
+        BrowserDb pdb = null;
         try {
-            new BrowserDb(act.getApplicationContext())
-                    .upsertPwa(fStart, fName, fTheme, pngBase64(fIcon), desktop, zoom);
-        } catch (Throwable ignore) {}
+            pdb = new BrowserDb(act.getApplicationContext());
+            pdb.upsertPwa(fStart, fName, fTheme, pngBase64(fIcon), desktop, zoom);
+        } catch (Throwable ignore) {
+        } finally {
+            if (pdb != null) pdb.close(); // 接続を開きっぱなしにしない
+        }
         act.runOnUiThread(() -> pin(act, fStart, fName, fTheme, fIcon, desktop, zoom));
     }
 
@@ -87,10 +91,11 @@ public class PwaInstaller {
      */
     static void syncFromShortcuts(android.content.Context ctx) {
         if (Build.VERSION.SDK_INT < 25) return;
+        BrowserDb db = null;
         try {
             ShortcutManager sm = ctx.getSystemService(ShortcutManager.class);
             if (sm == null) return;
-            BrowserDb db = new BrowserDb(ctx.getApplicationContext());
+            db = new BrowserDb(ctx.getApplicationContext());
             for (ShortcutInfo si : sm.getPinnedShortcuts()) {
                 Intent it = si.getIntent();
                 if (it == null || it.getComponent() == null || it.getData() == null) continue;
@@ -103,7 +108,10 @@ public class PwaInstaller {
                 int zoom = it.getIntExtra("pwa_zoom", 100);
                 db.insertPwaIfAbsent(url, name, theme, pngBase64(letterIcon(name)), desktop, zoom);
             }
-        } catch (Throwable ignore) {}
+        } catch (Throwable ignore) {
+        } finally {
+            if (db != null) db.close();
+        }
     }
 
     /** Bitmap → PNGのbase64文字列（data URIの本体）。 */

@@ -62,6 +62,7 @@ public class PwaImportActivity extends Activity {
                 // 引数なし = 現在の台帳をlogcatへ出すだけ（確認用）
                 for (BrowserDb.Pwa p : db.listPwas()) log("ledger: " + p.id + " | " + p.label() + " | " + p.url);
                 log("ledger: 合計" + db.listPwas().size() + "件");
+                db.close();
                 finish();
                 return;
             }
@@ -119,6 +120,7 @@ public class PwaImportActivity extends Activity {
             } catch (Throwable e) {
                 log("一括登録に失敗: " + e);
                 toast("PWA一括登録に失敗: " + e);
+                db.close();
                 finish();
                 return;
             }
@@ -126,6 +128,7 @@ public class PwaImportActivity extends Activity {
                     + " (台帳計" + db.listPwas().size() + ")";
             log(msg);
             toast(msg);
+            db.close();
             finish();
         }).start();
     }

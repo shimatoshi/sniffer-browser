@@ -87,10 +87,15 @@ public class PwaActivity extends Activity {
         zoom = it != null ? it.getIntExtra("pwa_zoom", 100) : 100;
         // 旧ショートカット(extra無し)からの起動は台帳のフラグで判定
         if (!desktop && zoom == 100) {
+            BrowserDb pdb = null;
             try {
-                BrowserDb.Pwa p = new BrowserDb(getApplicationContext()).getPwaByUrl(url);
+                pdb = new BrowserDb(getApplicationContext());
+                BrowserDb.Pwa p = pdb.getPwaByUrl(url);
                 if (p != null) { desktop = p.desktop; zoom = p.zoom; }
-            } catch (Throwable ignore) {}
+            } catch (Throwable ignore) {
+            } finally {
+                if (pdb != null) pdb.close(); // 接続リーク防止
+            }
         }
 
         try { homeHost = Uri.parse(url).getHost(); } catch (Throwable ignore) {}
