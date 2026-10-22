@@ -6,7 +6,7 @@
         android:height="27dp"
         android:gravity="center">
         <shape android:shape="rectangle">
-            <stroke android:width="2dp" android:color="#E8EAED" />
+            <stroke android:width="2dp" android:color="@color/on_surface" />
             <corners android:radius="6dp" />
         </shape>
     </item>

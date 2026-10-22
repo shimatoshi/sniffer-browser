@@ -16,6 +16,7 @@ import android.view.inputmethod.EditorInfo;
 import android.net.http.SslError;
 import android.webkit.CookieManager;
 import android.webkit.SslErrorHandler;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
@@ -436,6 +437,8 @@ public class MainActivity extends Activity {
         btnTabs.setText(String.valueOf(tabs.size())); // Chrome風: 枠付きスクエア(bg)内に数字だけ
     }
 
+    private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density + .5f); }
+
     private void showTabs() {
         ListView lv = new ListView(this);
         AlertDialog dlg = new AlertDialog.Builder(this)
@@ -452,7 +455,7 @@ public class MainActivity extends Activity {
                 Tab t = tabs.get(p);
                 LinearLayout row = new LinearLayout(MainActivity.this);
                 row.setOrientation(LinearLayout.HORIZONTAL);
-                row.setPadding(24, 16, 8, 16);
+                row.setPadding(dp(24), dp(16), dp(8), dp(16));
 
                 LinearLayout col = new LinearLayout(MainActivity.this);
                 col.setOrientation(LinearLayout.VERTICAL);
@@ -476,7 +479,10 @@ public class MainActivity extends Activity {
                 TextView close = new TextView(MainActivity.this);
                 close.setText("✕");
                 close.setTextSize(18);
-                close.setPadding(32, 8, 32, 8);
+                close.setGravity(android.view.Gravity.CENTER);
+                close.setMinWidth(dp(48));
+                close.setMinHeight(dp(48));
+                close.setContentDescription("タブを閉じる");
                 close.setOnClickListener(v -> {
                     closeTab(p);
                     dlg.setTitle("タブ");
@@ -742,7 +748,7 @@ public class MainActivity extends Activity {
     private void showPwaScheduleDialog(BrowserDb.Pwa p) {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(48, 16, 48, 0);
+        root.setPadding(dp(48), dp(16), dp(48), dp(0));
 
         final EditText times = new EditText(this);
         times.setHint("例: 7:00,12:30,22:00（空=無効）");
@@ -842,7 +848,7 @@ public class MainActivity extends Activity {
         }
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(24, 8, 24, 8);
+        root.setPadding(dp(24), dp(8), dp(24), dp(8));
         final EditText name = new EditText(this);
         name.setHint("表示名");
         name.setSingleLine(true);
@@ -1018,7 +1024,7 @@ public class MainActivity extends Activity {
     private void showFilters() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(24, 8, 24, 8);
+        root.setPadding(dp(24), dp(8), dp(24), dp(8));
         final EditText in = new EditText(this);
         in.setHint("URLに含まれる文字列（例: ads.example.com, /banner/）");
         in.setSingleLine(true);
@@ -1026,7 +1032,7 @@ public class MainActivity extends Activity {
         final ListView lv = new ListView(this);
         root.addView(lv, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                (int) (getResources().getDisplayMetrics().density * 280)));
+                dp(280)));
 
         final List<String> pats = new ArrayList<>(db.listFilterPatterns());
         final android.widget.ArrayAdapter<String> la = new android.widget.ArrayAdapter<>(
@@ -1131,7 +1137,7 @@ public class MainActivity extends Activity {
                 final UserScripts.Script s = items.get(p);
                 LinearLayout row = new LinearLayout(MainActivity.this);
                 row.setOrientation(LinearLayout.HORIZONTAL);
-                row.setPadding(8, 8, 8, 8);
+                row.setPadding(dp(8), dp(8), dp(8), dp(8));
                 android.widget.CheckBox cb = new android.widget.CheckBox(MainActivity.this);
                 cb.setChecked(s.enabled);
                 cb.setOnCheckedChangeListener((b, checked) -> {
@@ -1185,7 +1191,7 @@ public class MainActivity extends Activity {
         android.widget.ScrollView sc = new android.widget.ScrollView(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(24, 8, 24, 8);
+        root.setPadding(dp(24), dp(8), dp(24), dp(8));
         sc.addView(root);
 
         final EditText name = new EditText(this);
@@ -1209,7 +1215,7 @@ public class MainActivity extends Activity {
         code.setText(s.code);
         root.addView(code, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                (int) (getResources().getDisplayMetrics().density * 240)));
+                dp(240)));
 
         new AlertDialog.Builder(this)
                 .setTitle(s0 == null ? "スクリプト追加" : "スクリプト編集")
@@ -1292,7 +1298,7 @@ public class MainActivity extends Activity {
                 BrowserDb.Entry e = items.get(p);
                 LinearLayout col = new LinearLayout(MainActivity.this);
                 col.setOrientation(LinearLayout.VERTICAL);
-                col.setPadding(24, 14, 24, 14);
+                col.setPadding(dp(24), dp(14), dp(24), dp(14));
                 TextView title = new TextView(MainActivity.this);
                 title.setText(e.label());
                 title.setSingleLine(true);
@@ -1524,6 +1530,30 @@ public class MainActivity extends Activity {
                 // doUpdateVisitedHistoryはSPA遷移でも呼ばれるのでここでも追従させる。
                 t.pageUrl = url;
                 if (t == curTab()) runOnUiThread(() -> { setUrlBar(url); updateDlBtn(); });
+            }
+            // メインフレームの通信失敗は、WebView標準の素のエラー表示ではなく
+            // 原因と「再試行」を示す画面にする（base URLを失敗URLにして再読込・履歴を保つ）
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest req, WebResourceError err) {
+                if (req == null || !req.isForMainFrame()) return;
+                int code = err.getErrorCode();
+                if (code != WebViewClient.ERROR_HOST_LOOKUP && code != WebViewClient.ERROR_CONNECT
+                        && code != WebViewClient.ERROR_TIMEOUT && code != WebViewClient.ERROR_IO) return;
+                String failUrl = req.getUrl().toString();
+                String why = code == WebViewClient.ERROR_HOST_LOOKUP
+                        ? "サーバーが見つかりません。URLの綴りか、ネットワーク接続を確認してください。"
+                        : code == WebViewClient.ERROR_TIMEOUT
+                        ? "接続がタイムアウトしました。電波の良い場所で再試行してください。"
+                        : "サイトに接続できません。ネットワーク接続を確認してください。";
+                String html = "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+                        + "<body style='background:#202124;color:#E8EAED;font-family:sans-serif;padding:32px 24px'>"
+                        + "<h2 style='font-weight:500'>ページを開けません</h2>"
+                        + "<p style='color:#9AA0A6;line-height:1.6'>" + why + "</p>"
+                        + "<p style='color:#9AA0A6;font-size:12px;word-break:break-all'>"
+                        + android.text.TextUtils.htmlEncode(failUrl) + "<br>" + android.text.TextUtils.htmlEncode(String.valueOf(err.getDescription())) + "</p>"
+                        + "<button onclick='location.replace(" + org.json.JSONObject.quote(failUrl).replace("</", "<\\/") + ")' "
+                        + "style='margin-top:16px;padding:0 24px;min-height:48px;border:0;border-radius:24px;background:#8AB4F8;color:#202124;font-size:16px;font-weight:600'>再試行</button>";
+                view.loadDataWithBaseURL(failUrl, html, "text/html", "utf-8", failUrl);
             }
             // 証明書エラーの取り扱い。デフォルト挙動は無言cancel=真っ白なので、
             // WiFiキャプティブポータル（証明書を横取り/自己署名する事が多い）等で

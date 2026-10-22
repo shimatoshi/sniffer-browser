@@ -32,6 +32,12 @@ import android.widget.Toast;
  * 各Activityは onActivityResult → onFileResult、BACKキー → exitFullscreen を中継すること。
  */
 public class SnifferChrome extends WebChromeClient {
+    /** 利用者向けの短いエラー文言（例外クラス名の羅列を避ける） */
+    private static String errMsg(Throwable e) {
+        String m = e.getMessage();
+        return (m == null || m.isEmpty()) ? e.getClass().getSimpleName() : m;
+    }
+
 
     public static final int REQ_FILE = 71;
     public static final int REQ_GEO  = 72;
@@ -114,7 +120,7 @@ public class SnifferChrome extends WebChromeClient {
             return true;
         } catch (Throwable e) {
             fileCb = null;
-            Toast.makeText(act, "ファイルピッカーを開けない: " + e, Toast.LENGTH_SHORT).show();
+            Toast.makeText(act, "ファイルピッカーを開けない: " + errMsg(e), Toast.LENGTH_SHORT).show();
             return false;
         }
     }
@@ -232,13 +238,13 @@ public class SnifferChrome extends WebChromeClient {
         float dp = act.getResources().getDisplayMetrics().density;
         android.widget.LinearLayout box = new android.widget.LinearLayout(act);
         box.setOrientation(android.widget.LinearLayout.VERTICAL);
-        box.setBackgroundColor(0xffffffff);
+        box.setBackgroundColor(0xff202124);
         android.widget.LinearLayout bar = new android.widget.LinearLayout(act);
         bar.setOrientation(android.widget.LinearLayout.HORIZONTAL);
-        bar.setBackgroundColor(0xff37474f);
+        bar.setBackgroundColor(0xff202124);
         bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
         final android.widget.TextView host = new android.widget.TextView(act);
-        host.setTextColor(0xffffffff);
+        host.setTextColor(0xffe8eaed);
         host.setSingleLine(true);
         host.setPadding((int) (12 * dp), 0, 0, 0);
         try { host.setText("🔒 " + Uri.parse(firstUrl).getHost()); } catch (Throwable ignore) {}
@@ -247,8 +253,11 @@ public class SnifferChrome extends WebChromeClient {
         android.widget.TextView close = new android.widget.TextView(act);
         close.setText("✕");
         close.setTextSize(18);
-        close.setTextColor(0xffffffff);
-        close.setPadding((int) (16 * dp), (int) (8 * dp), (int) (16 * dp), (int) (8 * dp));
+        close.setTextColor(0xffe8eaed);
+        close.setGravity(android.view.Gravity.CENTER);
+        close.setMinWidth((int) (48 * dp));
+        close.setMinHeight((int) (48 * dp));
+        close.setContentDescription("ポップアップを閉じる");
         close.setOnClickListener(v -> closePopup());
         bar.addView(close);
         box.addView(bar, new android.widget.LinearLayout.LayoutParams(
@@ -648,7 +657,7 @@ public class SnifferChrome extends WebChromeClient {
                     ((DownloadManager) act.getSystemService(Context.DOWNLOAD_SERVICE)).enqueue(r);
                     Toast.makeText(act, "DL開始: " + fn, Toast.LENGTH_SHORT).show();
                 } catch (Throwable e) {
-                    Toast.makeText(act, "DL失敗: " + e, Toast.LENGTH_SHORT).show();
+                    Toast.makeText(act, "DL失敗: " + errMsg(e), Toast.LENGTH_SHORT).show();
                 }
             });
         }).start();
@@ -863,7 +872,7 @@ public class SnifferChrome extends WebChromeClient {
                         "window.__snifferDLDone && window.__snifferDLDone(" + dlId + ")", null));
             }
         } catch (Throwable e) {
-            Toast.makeText(act, "DL失敗: " + e, Toast.LENGTH_SHORT).show();
+            Toast.makeText(act, "DL失敗: " + errMsg(e), Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -1053,7 +1062,7 @@ public class SnifferChrome extends WebChromeClient {
             act.sendBroadcast(new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, Uri.fromFile(out)));
             Toast.makeText(act, "保存した: Download/" + out.getName(), Toast.LENGTH_SHORT).show();
         } catch (Throwable e) {
-            Toast.makeText(act, "保存失敗: " + e, Toast.LENGTH_SHORT).show();
+            Toast.makeText(act, "保存失敗: " + errMsg(e), Toast.LENGTH_SHORT).show();
         }
     }
 }

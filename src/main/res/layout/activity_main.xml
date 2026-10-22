@@ -3,14 +3,14 @@
     android:orientation="vertical"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#202124">
+    android:background="@color/surface">
 
     <LinearLayout
         android:id="@+id/topBar"
         android:orientation="horizontal"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="#202124"
+        android:background="@color/surface"
         android:paddingLeft="8dp"
         android:paddingRight="4dp"
         android:paddingTop="6dp"
@@ -20,14 +20,14 @@
         <EditText
             android:id="@+id/url"
             android:layout_width="0dp"
-            android:layout_height="40dp"
+            android:layout_height="48dp"
             android:layout_weight="1"
             android:singleLine="true"
             android:inputType="textUri"
             android:imeOptions="actionGo"
             android:hint="検索またはURLを入力"
-            android:textColor="#E8EAED"
-            android:textColorHint="#9AA0A6"
+            android:textColor="@color/on_surface"
+            android:textColorHint="@color/on_surface_muted"
             android:textSize="14sp"
             android:background="@drawable/omnibox_bg"
             android:paddingLeft="16dp"
@@ -35,23 +35,23 @@
 
         <ImageButton
             android:id="@+id/btnReload"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:padding="9dp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:padding="12dp"
             android:scaleType="fitCenter"
             android:src="@drawable/ic_refresh"
             android:contentDescription="再読み込み"
             android:background="?android:attr/selectableItemBackgroundBorderless" />
 
         <FrameLayout
-            android:layout_width="40dp"
-            android:layout_height="40dp">
+            android:layout_width="48dp"
+            android:layout_height="48dp">
 
             <ImageButton
                 android:id="@+id/btnDl"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:padding="9dp"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:padding="12dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_download"
                 android:contentDescription="ダウンロード"
@@ -69,7 +69,7 @@
                 android:paddingRight="3dp"
                 android:background="@drawable/dl_badge_bg"
                 android:text="0"
-                android:textColor="#202124"
+                android:textColor="@color/surface"
                 android:textSize="10sp"
                 android:textStyle="bold"
                 android:visibility="gone" />
@@ -82,7 +82,7 @@
         android:layout_width="match_parent"
         android:layout_height="3dp"
         android:max="100"
-        android:progressTint="#8AB4F8"
+        android:progressTint="@color/accent"
         android:visibility="gone" />
 
     <net.localhost.sniffer.PullRefreshContainer
@@ -94,14 +94,14 @@
     <View
         android:layout_width="match_parent"
         android:layout_height="1px"
-        android:background="#3C4043" />
+        android:background="@color/divider" />
 
     <LinearLayout
         android:id="@+id/bottomBar"
         android:orientation="horizontal"
         android:layout_width="match_parent"
         android:layout_height="48dp"
-        android:background="#202124"
+        android:background="@color/surface"
         android:gravity="center_vertical">
 
         <ImageButton
@@ -147,7 +147,7 @@
             android:text="1"
             android:textSize="14sp"
             android:textStyle="bold"
-            android:textColor="#E8EAED"
+            android:textColor="@color/on_surface"
             android:background="@drawable/tab_count_bg" />
 
         <ImageButton
