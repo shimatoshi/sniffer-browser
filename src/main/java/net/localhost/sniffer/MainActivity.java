@@ -8,6 +8,7 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
@@ -239,6 +240,25 @@ public class MainActivity extends Activity {
         // フォーカス済みの状態での再タップはonFocusChangeが発火せず選択が外れるだけなので、
         // クリックの度に明示selectAllして常に全選択状態を保証する。
         urlBar.setOnClickListener(v -> urlBar.selectAll());
+        // Chrome風: アドレスバーを横にスワイプで隣のタブへ（入力中=フォーカス時は通常のカーソル操作を優先）
+        final android.view.GestureDetector urlSwipe = new android.view.GestureDetector(this,
+                new android.view.GestureDetector.SimpleOnGestureListener() {
+            @Override public boolean onFling(MotionEvent e1, MotionEvent e2, float vx, float vy) {
+                if (e1 == null || tabs.size() < 2) return false;
+                float dx = e2.getX() - e1.getX(), dy = e2.getY() - e1.getY();
+                if (Math.abs(dx) < dp(60) || Math.abs(dx) < Math.abs(dy) * 2) return false;
+                int to = cur + (dx < 0 ? 1 : -1);
+                if (to < 0 || to >= tabs.size()) return false;
+                switchTab(to);
+                return true;
+            }
+        });
+        urlBar.setOnTouchListener((v, ev) -> {
+            if (urlBar.hasFocus()) return false;
+            boolean swiped = urlSwipe.onTouchEvent(ev);
+            if (swiped) { ev.setAction(MotionEvent.ACTION_CANCEL); v.onTouchEvent(ev); }
+            return swiped;
+        });
         urlBar.setOnEditorActionListener((v, actionId, ev) -> {
             if (actionId == EditorInfo.IME_ACTION_GO ||
                     (ev != null && ev.getKeyCode() == KeyEvent.KEYCODE_ENTER)) {
@@ -542,21 +562,53 @@ public class MainActivity extends Activity {
                 th.setContentDescription("タブのプレビュー");
                 card.addView(th, new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, dp(140)));
+                card.setOnClickListener(v -> { switchTab(p); dlg.dismiss(); });
+                // 長押しでドラッグ → 別カード上でドロップして並べ替え（Chrome同様）
+                card.setOnLongClickListener(v -> {
+                    v.startDrag(android.content.ClipData.newPlainText("tab", String.valueOf(p)),
+                            new View.DragShadowBuilder(v), Integer.valueOf(p), 0);
+                    v.setAlpha(0.4f);
+                    return true;
+                });
+                // 横スワイプで閉じる（Chrome同様）
+                final float[] down = new float[2];
+                final boolean[] swiping = new boolean[1];
+                card.setOnTouchListener((v, ev) -> {
+                    switch (ev.getActionMasked()) {
+                        case MotionEvent.ACTION_DOWN:
+                            down[0] = ev.getRawX(); down[1] = ev.getRawY(); swiping[0] = false;
+                            return false;
+                        case MotionEvent.ACTION_MOVE: {
+                            float dx = ev.getRawX() - down[0], dy = ev.getRawY() - down[1];
+                            if (!swiping[0] && Math.abs(dx) > dp(16) && Math.abs(dx) > Math.abs(dy) * 1.5f) {
+                                swiping[0] = true;
+                                v.cancelLongPress();
+                                v.setPressed(false);
+                                v.getParent().requestDisallowInterceptTouchEvent(true);
+                            }
+                            if (swiping[0]) { v.setTranslationX(dx); v.setAlpha(1f - Math.min(1f, Math.abs(dx) / v.getWidth())); return true; }
+                            return false;
+                        }
+                        case MotionEvent.ACTION_UP:
+                        case MotionEvent.ACTION_CANCEL: {
+                            if (!swiping[0]) return false;
+                            swiping[0] = false;
+                            float dx = ev.getRawX() - down[0];
+                            if (ev.getActionMasked() == MotionEvent.ACTION_UP && Math.abs(dx) > v.getWidth() / 3f) {
+                                v.animate().translationX(Math.signum(dx) * v.getWidth()).alpha(0f).setDuration(120)
+                                        .withEndAction(() -> { closeTab(p); notifyDataSetChanged(); });
+                            } else {
+                                v.animate().translationX(0f).alpha(1f).setDuration(120);
+                            }
+                            return true;
+                        }
+                    }
+                    return false;
+                });
                 return card;
             }
         };
         lv.setAdapter(ad);
-        lv.setOnItemClickListener((parent, v, p, id) -> {
-            switchTab(p);
-            dlg.dismiss();
-        });
-        // 長押しでドラッグ → 別カード上でドロップして並べ替え（Chrome同様）
-        lv.setOnItemLongClickListener((parent, v, p, id) -> {
-            v.startDrag(android.content.ClipData.newPlainText("tab", String.valueOf(p)),
-                    new View.DragShadowBuilder(v), Integer.valueOf(p), 0);
-            v.setAlpha(0.4f);
-            return true;
-        });
         lv.setOnDragListener((v, ev) -> {
             switch (ev.getAction()) {
                 case android.view.DragEvent.ACTION_DRAG_STARTED:
