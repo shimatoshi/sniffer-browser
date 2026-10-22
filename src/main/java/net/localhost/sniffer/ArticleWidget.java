@@ -25,8 +25,12 @@ public class ArticleWidget extends AppWidgetProvider {
     }
 
     private void render(Context ctx, AppWidgetManager mgr, int id, boolean refreshing) {
+        render(ctx, mgr, id, refreshing ? "更新中…" : "");
+    }
+
+    private void render(Context ctx, AppWidgetManager mgr, int id, String status) {
         RemoteViews rv = new RemoteViews(ctx.getPackageName(), R.layout.widget_articles);
-        rv.setTextViewText(R.id.articleStatus, refreshing ? "更新中…" : "");
+        rv.setTextViewText(R.id.articleStatus, status);
 
         // リスト本体をRemoteViewsServiceに接続
         Intent svc = new Intent(ctx, ArticleWidgetService.class);
@@ -72,19 +76,23 @@ public class ArticleWidget extends AppWidgetProvider {
         final Context app = ctx.getApplicationContext();
         new Thread(() -> {
             BrowserDb db = null;
+            String status = "";
             try {
                 db = new BrowserDb(app);
                 List<BrowserDb.Entry> pins = db.listPins();
                 String ua = "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/120 Mobile";
                 List<BrowserDb.FeedItem> items = HomePage.collectAll(pins, ua);
                 db.replaceFeed(items);
+                int failed = HomePage.lastFailed;
+                if (failed > 0) status = failed + "件取得失敗";
             } catch (Throwable ignore) {
+                status = "更新失敗";
             } finally {
                 if (db != null) db.close();
                 AppWidgetManager m = AppWidgetManager.getInstance(app);
                 int[] live = m.getAppWidgetIds(new ComponentName(app, ArticleWidget.class));
                 m.notifyAppWidgetViewDataChanged(live, R.id.articleList);
-                for (int id : live) render(app, m, id, false);
+                for (int id : live) render(app, m, id, status);
                 pr.finish();
             }
         }).start();

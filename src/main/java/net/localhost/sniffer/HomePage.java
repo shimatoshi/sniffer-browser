@@ -46,8 +46,12 @@ public class HomePage {
      * 全固定サイトの新着を取得し、サイトラベル付きの一本のリストにまとめて返す（記事ウィジェット用）。
      * ブロッキングなのでワーカースレッドから呼ぶこと。メモリキャッシュも併せて更新する。
      */
+    /** 直近のcollectAllで記事を取得できなかったサイト数（通信失敗・空応答） */
+    public static volatile int lastFailed = 0;
+
     public static List<BrowserDb.FeedItem> collectAll(List<BrowserDb.Entry> pins, String ua) {
         List<BrowserDb.FeedItem> out = new ArrayList<>();
+        int failed = 0;
         for (BrowserDb.Entry p : pins) {
             List<Article> arts;
             try {
@@ -55,9 +59,11 @@ public class HomePage {
             } catch (Throwable e) {
                 arts = new ArrayList<>();
             }
+            if (arts.isEmpty()) failed++;
             cache.put(p.url, new CacheEnt(arts));
             for (Article a : arts) out.add(new BrowserDb.FeedItem(p.label(), a.title, a.url));
         }
+        lastFailed = failed;
         return out;
     }
 

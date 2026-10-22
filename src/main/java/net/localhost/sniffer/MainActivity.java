@@ -13,6 +13,7 @@ import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
+import android.graphics.Bitmap;
 import android.net.http.SslError;
 import android.webkit.CookieManager;
 import android.webkit.SslErrorHandler;
@@ -75,6 +76,8 @@ public class MainActivity extends Activity {
         volatile String pendingUrl = null;
         // 未生成タブをタブ一覧に出すための表示名（WebViewが無いとgetTitleできないため）。
         volatile String pendingTitle = null;
+        // タブ一覧用の縮小スクリーンショット。WebView破棄後も残す（取得失敗時はnull）。
+        Bitmap thumb;
         // ドメイン別PC版指定でUA差し替え→再読込を撃ったURL。同一URLで二重に撃たないための番人。
         volatile String uaReloadedFor = null;
         // 破棄したWebViewの履歴・スクロール位置。再表示時に restoreState で復元する。
@@ -142,9 +145,25 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** 表示中WebViewを1/5に縮小描画してタブ一覧のサムネイルにする。失敗しても無視。 */
+    private void captureThumb(Tab t) {
+        WebView w = t.web;
+        if (w == null || w.getWidth() <= 0 || w.getHeight() <= 0 || w.getVisibility() != View.VISIBLE) return;
+        try {
+            float sc = 0.2f;
+            Bitmap bm = Bitmap.createBitmap(Math.max(1, (int) (w.getWidth() * sc)),
+                    Math.max(1, (int) (w.getHeight() * sc)), Bitmap.Config.RGB_565);
+            android.graphics.Canvas c = new android.graphics.Canvas(bm);
+            c.scale(sc, sc);
+            w.draw(c);
+            t.thumb = bm;
+        } catch (Throwable ignore) {}
+    }
+
     /** タブのWebViewを捨てて、URL＋saveStateだけの状態に戻す。タブ自体は残る。 */
     private void discard(Tab t) {
         if (t.web == null) return;
+        captureThumb(t);
         Bundle b = new Bundle();
         try {
             t.web.saveState(b);   // 履歴とスクロール位置。戻った時に読み直しても同じ場所に出る
@@ -387,7 +406,7 @@ public class MainActivity extends Activity {
     private void switchTab(int i) {
         if (i < 0 || i >= tabs.size()) return;
         Tab prev = curTab();
-        if (prev != null && prev.web != null) prev.web.setVisibility(View.GONE);
+        if (prev != null && prev.web != null) { captureThumb(prev); prev.web.setVisibility(View.GONE); }
         cur = i;
         Tab t = tabs.get(i);
         t.lastShown = System.currentTimeMillis();
@@ -440,6 +459,8 @@ public class MainActivity extends Activity {
     private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density + .5f); }
 
     private void showTabs() {
+        Tab shown = curTab();
+        if (shown != null) captureThumb(shown);
         ListView lv = new ListView(this);
         AlertDialog dlg = new AlertDialog.Builder(this)
                 .setTitle("タブ")
@@ -455,7 +476,17 @@ public class MainActivity extends Activity {
                 Tab t = tabs.get(p);
                 LinearLayout row = new LinearLayout(MainActivity.this);
                 row.setOrientation(LinearLayout.HORIZONTAL);
-                row.setPadding(dp(24), dp(16), dp(8), dp(16));
+                row.setPadding(dp(16), dp(8), dp(8), dp(8));
+                row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+
+                android.widget.ImageView th = new android.widget.ImageView(MainActivity.this);
+                th.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
+                th.setBackgroundColor(0xFF303134);
+                if (t.thumb != null) th.setImageBitmap(t.thumb);
+                th.setContentDescription("タブのプレビュー");
+                LinearLayout.LayoutParams thp = new LinearLayout.LayoutParams(dp(56), dp(72));
+                thp.rightMargin = dp(12);
+                row.addView(th, thp);
 
                 LinearLayout col = new LinearLayout(MainActivity.this);
                 col.setOrientation(LinearLayout.VERTICAL);
