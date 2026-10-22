@@ -550,6 +550,33 @@ public class MainActivity extends Activity {
             switchTab(p);
             dlg.dismiss();
         });
+        // 長押しでドラッグ → 別カード上でドロップして並べ替え（Chrome同様）
+        lv.setOnItemLongClickListener((parent, v, p, id) -> {
+            v.startDrag(android.content.ClipData.newPlainText("tab", String.valueOf(p)),
+                    new View.DragShadowBuilder(v), Integer.valueOf(p), 0);
+            v.setAlpha(0.4f);
+            return true;
+        });
+        lv.setOnDragListener((v, ev) -> {
+            switch (ev.getAction()) {
+                case android.view.DragEvent.ACTION_DRAG_STARTED:
+                    return true;
+                case android.view.DragEvent.ACTION_DROP: {
+                    int from = (Integer) ev.getLocalState();
+                    int to = lv.pointToPosition((int) ev.getX(), (int) ev.getY());
+                    if (to >= 0 && to != from && from < tabs.size() && to < tabs.size()) {
+                        Tab keep = curTab();
+                        tabs.add(to, tabs.remove(from));
+                        cur = tabs.indexOf(keep);
+                    }
+                    return true;
+                }
+                case android.view.DragEvent.ACTION_DRAG_ENDED:
+                    ad.notifyDataSetChanged(); // 半透明の戻しと並び順の反映
+                    return true;
+            }
+            return true;
+        });
         dlg.show();
     }
 
