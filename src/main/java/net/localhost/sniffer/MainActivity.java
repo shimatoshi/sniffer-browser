@@ -476,7 +476,12 @@ public class MainActivity extends Activity {
     private void showTabs() {
         Tab shown = curTab();
         if (shown != null) captureThumb(shown);
-        ListView lv = new ListView(this);
+        android.widget.GridView lv = new android.widget.GridView(this);
+        lv.setNumColumns(2);
+        lv.setHorizontalSpacing(dp(8));
+        lv.setVerticalSpacing(dp(8));
+        lv.setPadding(dp(12), dp(8), dp(12), dp(8));
+        lv.setClipToPadding(false);
         AlertDialog.Builder tb = new AlertDialog.Builder(this)
                 .setTitle("タブ")
                 .setView(lv)
@@ -493,53 +498,51 @@ public class MainActivity extends Activity {
             @Override public long getItemId(int p) { return p; }
             @Override public View getView(int p, View cv, ViewGroup parent) {
                 Tab t = tabs.get(p);
-                LinearLayout row = new LinearLayout(MainActivity.this);
-                row.setOrientation(LinearLayout.HORIZONTAL);
-                row.setPadding(dp(16), dp(8), dp(8), dp(8));
-                row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+                LinearLayout card = new LinearLayout(MainActivity.this);
+                card.setOrientation(LinearLayout.VERTICAL);
+                card.setBackgroundColor(p == cur ? 0xFF4A6FA5 : 0xFF3C4043);
+                card.setPadding(dp(2), dp(2), dp(2), dp(2));
 
-                android.widget.ImageView th = new android.widget.ImageView(MainActivity.this);
-                th.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
-                th.setBackgroundColor(0xFF303134);
-                if (t.thumb != null) th.setImageBitmap(t.thumb);
-                th.setContentDescription("タブのプレビュー");
-                LinearLayout.LayoutParams thp = new LinearLayout.LayoutParams(dp(56), dp(72));
-                thp.rightMargin = dp(12);
-                row.addView(th, thp);
-
-                LinearLayout col = new LinearLayout(MainActivity.this);
-                col.setOrientation(LinearLayout.VERTICAL);
+                // ヘッダ行: タイトル + ✕
+                LinearLayout head = new LinearLayout(MainActivity.this);
+                head.setOrientation(LinearLayout.HORIZONTAL);
+                head.setGravity(android.view.Gravity.CENTER_VERTICAL);
+                head.setPadding(dp(8), 0, 0, 0);
                 TextView title = new TextView(MainActivity.this);
                 String tt = (t.web != null) ? t.web.getTitle() : t.pendingTitle;
-                if ((tt == null || tt.isEmpty()) && t.pendingUrl != null) tt = t.pendingUrl;
-                title.setText((p == cur ? "▶ " : "") + (tt == null || tt.isEmpty() ? "(無題)" : tt));
-                title.setSingleLine(true);
-                title.setTextSize(15);
-                TextView url = new TextView(MainActivity.this);
                 String uu = (t.web != null) ? t.web.getUrl() : null;
                 if (uu == null) uu = t.pendingUrl;
-                url.setText(uu == null ? "" : uu);
-                url.setSingleLine(true);
-                url.setTextSize(11);
-                col.addView(title);
-                col.addView(url);
-                row.addView(col, new LinearLayout.LayoutParams(
+                if ((tt == null || tt.isEmpty()) && uu != null) tt = uu;
+                title.setText(tt == null || tt.isEmpty() ? "(無題)" : tt);
+                title.setSingleLine(true);
+                title.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                title.setTextSize(13);
+                title.setTextColor(0xFFE8EAED);
+                head.addView(title, new LinearLayout.LayoutParams(
                         0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
                 TextView close = new TextView(MainActivity.this);
                 close.setText("✕");
-                close.setTextSize(18);
+                close.setTextSize(16);
+                close.setTextColor(0xFFE8EAED);
                 close.setGravity(android.view.Gravity.CENTER);
                 close.setMinWidth(dp(48));
                 close.setMinHeight(dp(48));
                 close.setContentDescription("タブを閉じる");
                 close.setOnClickListener(v -> {
                     closeTab(p);
-                    dlg.setTitle("タブ");
                     notifyDataSetChanged();
                 });
-                row.addView(close);
-                return row;
+                head.addView(close);
+                card.addView(head);
+
+                android.widget.ImageView th = new android.widget.ImageView(MainActivity.this);
+                th.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
+                th.setBackgroundColor(0xFF303134);
+                if (t.thumb != null) th.setImageBitmap(t.thumb);
+                th.setContentDescription("タブのプレビュー");
+                card.addView(th, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(140)));
+                return card;
             }
         };
         lv.setAdapter(ad);
@@ -548,6 +551,63 @@ public class MainActivity extends Activity {
             dlg.dismiss();
         });
         dlg.show();
+    }
+
+    // ---- ページ内検索 ----
+
+    private void showFindDialog(Tab t) {
+        final WebView w = web(t);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+        EditText et = new EditText(this);
+        et.setHint("ページ内を検索");
+        et.setSingleLine(true);
+        et.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
+        TextView count = new TextView(this);
+        count.setTextSize(12);
+        box.addView(et);
+        box.addView(count);
+        w.setFindListener((active, total, done) -> {
+            if (!done) return;
+            count.setText(total == 0 ? "見つかりません"
+                    : (active + 1) + " / " + total);
+        });
+        et.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void afterTextChanged(android.text.Editable e) {
+                if (e.length() == 0) { w.clearMatches(); count.setText(""); }
+                else w.findAllAsync(e.toString());
+            }
+        });
+        et.setOnEditorActionListener((v, id, ev) -> { w.findNext(true); return true; });
+        AlertDialog d = new AlertDialog.Builder(this)
+                .setTitle("🔍 ページ内検索")
+                .setView(box)
+                .setPositiveButton("次へ ▼", null)
+                .setNeutralButton("▲ 前へ", null)
+                .setNegativeButton("閉じる", null)
+                .create();
+        d.setOnDismissListener(x -> { w.clearMatches(); w.setFindListener(null); });
+        d.show();
+        // 押しても閉じないよう、show後にリスナを差し替える
+        d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> w.findNext(true));
+        d.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> w.findNext(false));
+        et.requestFocus();
+        d.getWindow().setSoftInputMode(
+                android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE);
+    }
+
+    private void sharePage(Tab t) {
+        String u = web(t).getUrl();
+        if (u == null || u.isEmpty()) return;
+        Intent i = new Intent(Intent.ACTION_SEND);
+        i.setType("text/plain");
+        i.putExtra(Intent.EXTRA_TEXT, u);
+        String title = web(t).getTitle();
+        if (title != null) i.putExtra(Intent.EXTRA_SUBJECT, title);
+        startActivity(Intent.createChooser(i, "共有"));
     }
 
     // ---- メニュー ----
@@ -561,6 +621,8 @@ public class MainActivity extends Activity {
         m.add(1, 2, 0, "⟳ 再読み込み");
         m.add(1, 12, 0, t.desktop ? "📱 モバイル版に戻す" : "🖥 PC版サイト");
         m.add(1, 17, 0, "🔍 ズーム (" + t.zoom + "%)");
+        m.add(1, 18, 0, "🔎 ページ内検索");
+        m.add(1, 19, 0, "↗ 共有");
         // YouTube動画ページなら動画DL項目を出す
         final String ytId = SnifferChrome.youtubeVideoId(web(t).getUrl());
         if (ytId != null) {
@@ -645,6 +707,8 @@ public class MainActivity extends Activity {
                         SnifferChrome.downloadYoutube(this, ytId, web(t).getTitle(), true);
                     return true;
                 case 17: showZoomDialog(t); return true;
+                case 18: showFindDialog(t); return true;
+                case 19: sharePage(t); return true;
             }
             return false;
         };
