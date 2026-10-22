@@ -439,11 +439,26 @@ public class MainActivity extends Activity {
         int n = Hits.countFor(t != null ? t.pageUrl : null);
         btnDlBadge.setVisibility(n > 0 ? View.VISIBLE : View.GONE);
         btnDlBadge.setText(String.valueOf(n));
+        // 新しいメディアが見つかった瞬間だけ、バッジを一度ふくらませて気づかせる
+        if (n > lastBadgeCount && n > 0) {
+            btnDlBadge.animate().cancel();
+            btnDlBadge.setScaleX(1f); btnDlBadge.setScaleY(1f);
+            btnDlBadge.animate().scaleX(1.5f).scaleY(1.5f).setDuration(160)
+                    .withEndAction(() -> btnDlBadge.animate().scaleX(1f).scaleY(1f).setDuration(160));
+        }
+        lastBadgeCount = n;
     }
+
+    private int lastBadgeCount = 0;
+    /** 直近に閉じたタブのURL（タブ一覧から「閉じたタブを開く」で復活させる） */
+    private String lastClosedUrl = null;
 
     private void closeTab(int i) {
         if (i < 0 || i >= tabs.size()) return;
         Tab t = tabs.remove(i);
+        String closedUrl = (t.web != null) ? t.web.getUrl() : t.pendingUrl;
+        if (closedUrl != null && !closedUrl.isEmpty() && !closedUrl.equals("about:blank")
+                && !closedUrl.startsWith("data:")) lastClosedUrl = closedUrl;
         if (t.web != null) { webContainer.removeView(t.web); t.web.destroy(); }
         if (tabs.isEmpty()) { cur = -1; createTab(HOME, true); return; }
         int next = (i == cur) ? Math.min(i, tabs.size() - 1)
@@ -462,12 +477,16 @@ public class MainActivity extends Activity {
         Tab shown = curTab();
         if (shown != null) captureThumb(shown);
         ListView lv = new ListView(this);
-        AlertDialog dlg = new AlertDialog.Builder(this)
+        AlertDialog.Builder tb = new AlertDialog.Builder(this)
                 .setTitle("タブ")
                 .setView(lv)
                 .setPositiveButton("＋ 新規タブ", (d, w) -> createTab(HOME, true))
-                .setNegativeButton("閉じる", null)
-                .create();
+                .setNegativeButton("閉じる", null);
+        if (lastClosedUrl != null) {
+            final String reopen = lastClosedUrl;
+            tb.setNeutralButton("↩ 閉じたタブ", (d, w) -> { lastClosedUrl = null; createTab(reopen, true); });
+        }
+        AlertDialog dlg = tb.create();
         BaseAdapter ad = new BaseAdapter() {
             @Override public int getCount() { return tabs.size(); }
             @Override public Object getItem(int p) { return tabs.get(p); }
@@ -538,29 +557,46 @@ public class MainActivity extends Activity {
         if (t == null) return;
         PopupMenu pm = new PopupMenu(this, anchor);
         Menu m = pm.getMenu();
-        m.add(0, 2, 0, "⟳ 再読み込み");
-        m.add(0, 12, 0, t.desktop ? "📱 モバイル版に戻す" : "🖥 PC版サイト");
-        m.add(0, 17, 0, "🔍 ズーム (" + t.zoom + "%)");
+        // 3グループ: ①このページへの操作 ②保存したものの一覧 ③追加・ツール・設定
+        m.add(1, 2, 0, "⟳ 再読み込み");
+        m.add(1, 12, 0, t.desktop ? "📱 モバイル版に戻す" : "🖥 PC版サイト");
+        m.add(1, 17, 0, "🔍 ズーム (" + t.zoom + "%)");
         // YouTube動画ページなら動画DL項目を出す
         final String ytId = SnifferChrome.youtubeVideoId(web(t).getUrl());
         if (ytId != null) {
-            m.add(0, 15, 0, "⬇ この動画をDL (ShimaTube)");
-            m.add(0, 16, 0, "♪ 音声のみDL (ShimaTube)");
+            m.add(1, 15, 0, "⬇ この動画をDL (ShimaTube)");
+            m.add(1, 16, 0, "♪ 音声のみDL (ShimaTube)");
         }
         boolean bm = db.isBookmarked(web(t).getUrl());
-        m.add(0, 3, 0, bm ? "★ ブックマーク解除" : "☆ ブックマークに追加");
-        m.add(0, 4, 0, "📑 ブックマーク");
-        m.add(0, 5, 0, "🕘 履歴");
-        m.add(0, 13, 0, "📱 アプリ（PWA）");
-        m.add(0, 14, 0, "📌 固定サイト");
-        m.add(0, 11, 0, "📶 WiFiログイン");
-        m.add(0, 9, 0, "📌 固定サイトに追加");
-        m.add(0, 6, 0, "📱 PWAとしてホームに追加");
-        m.add(0, 10, 0, "📦 オフライン");
-        m.add(0, 8, 0, "📜 ユーザースクリプト");
-        m.add(0, 7, 0, "⚙ 設定");
-        pm.setOnMenuItemClickListener(item -> {
+        m.add(1, 3, 0, bm ? "★ ブックマーク解除" : "☆ ブックマークに追加");
+        m.add(2, 4, 0, "📑 ブックマーク");
+        m.add(2, 5, 0, "🕘 履歴");
+        m.add(2, 14, 0, "📌 固定サイト");
+        m.add(2, 13, 0, "📱 アプリ（PWA）");
+        m.add(3, 20, 0, "＋ このページを追加 ▸");
+        m.add(3, 21, 0, "🧰 ツール ▸");
+        m.add(3, 7, 0, "⚙ 設定");
+        if (Build.VERSION.SDK_INT >= 28) m.setGroupDividerEnabled(true);
+        final PopupMenu.OnMenuItemClickListener[] lis = new PopupMenu.OnMenuItemClickListener[1];
+        lis[0] = item -> {
             switch (item.getItemId()) {
+                case 20: {
+                    PopupMenu sub = new PopupMenu(this, anchor);
+                    sub.getMenu().add(0, 9, 0, "📌 固定サイトに追加");
+                    sub.getMenu().add(0, 6, 0, "📱 PWAとしてホーム画面に追加");
+                    sub.setOnMenuItemClickListener(lis[0]);
+                    sub.show();
+                    return true;
+                }
+                case 21: {
+                    PopupMenu sub = new PopupMenu(this, anchor);
+                    sub.getMenu().add(0, 10, 0, "📦 オフライン保存");
+                    sub.getMenu().add(0, 11, 0, "📶 WiFiログイン");
+                    sub.getMenu().add(0, 8, 0, "📜 ユーザースクリプト");
+                    sub.setOnMenuItemClickListener(lis[0]);
+                    sub.show();
+                    return true;
+                }
                 case 2: web(t).reload(); return true;
                 case 3:
                     String u = web(t).getUrl();
@@ -611,7 +647,8 @@ public class MainActivity extends Activity {
                 case 17: showZoomDialog(t); return true;
             }
             return false;
-        });
+        };
+        pm.setOnMenuItemClickListener(lis[0]);
         pm.show();
     }
 
