@@ -548,10 +548,10 @@ public class MainActivity extends Activity {
         lv.setNumColumns(2);
         lv.setHorizontalSpacing(dp(12));
         lv.setVerticalSpacing(dp(12));
-        lv.setPadding(dp(12), dp(4), dp(12), dp(16));
+        lv.setPadding(dp(12), dp(4), dp(12), dp(96)); // 右下の＋ボタンに最後のカードが隠れないよう
         lv.setClipToPadding(false);
         lv.setSelector(new android.graphics.drawable.ColorDrawable(0));
-        // Chrome同様の全画面タブ一覧: 上部バー[閉じる | n個のタブ | 閉じたタブ復活 | 新規]
+        // Chrome同様の全画面タブ一覧: 上部バー[閉じる | n個のタブ | 閉じたタブ復活]、右下に新規タブ
         final android.app.Dialog dlg = new android.app.Dialog(this, R.style.FullPanel);
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
@@ -572,9 +572,27 @@ public class MainActivity extends Activity {
                 lastClosedUrl = null; dlg.dismiss(); createTab(reopen, true);
             }));
         }
-        bar.addView(iconButton(R.drawable.ic_m_add, "新しいタブ", v -> { dlg.dismiss(); createTab(HOME, true); }));
         panel.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)));
-        panel.addView(lv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        // 新規タブは親指の届く右下に浮かせる
+        android.widget.FrameLayout body = new android.widget.FrameLayout(this);
+        body.addView(lv);
+        android.widget.ImageButton fab = new android.widget.ImageButton(this);
+        android.graphics.drawable.Drawable plus = getDrawable(R.drawable.ic_m_add).mutate();
+        plus.setTint(getColor(R.color.surface));
+        fab.setImageDrawable(plus);
+        android.graphics.drawable.GradientDrawable fabBg = new android.graphics.drawable.GradientDrawable();
+        fabBg.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+        fabBg.setColor(getColor(R.color.accent));
+        fab.setBackground(new android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(0x33000000), fabBg, null));
+        fab.setElevation(dp(6));
+        fab.setContentDescription("新しいタブ");
+        fab.setOnClickListener(v -> { dlg.dismiss(); createTab(HOME, true); });
+        android.widget.FrameLayout.LayoutParams flp = new android.widget.FrameLayout.LayoutParams(
+                dp(56), dp(56), android.view.Gravity.BOTTOM | android.view.Gravity.END);
+        flp.setMargins(0, 0, dp(20), dp(24));
+        body.addView(fab, flp);
+        panel.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         BaseAdapter ad = new BaseAdapter() {
             @Override public int getCount() { return tabs.size(); }
             @Override public Object getItem(int p) { return tabs.get(p); }
@@ -2018,7 +2036,7 @@ public class MainActivity extends Activity {
         if (web) {
             ic = getDrawable("https".equals(scheme) ? R.drawable.ic_m_lock : R.drawable.ic_m_info).mutate();
             ic.setTint(getColor(R.color.on_surface_muted));
-            ic.setBounds(0, 0, dp(16), dp(16));
+            ic.setBounds(0, 0, dp(18), dp(18));
         }
         urlBar.setCompoundDrawablesRelative(ic, null, null, null);
     }
