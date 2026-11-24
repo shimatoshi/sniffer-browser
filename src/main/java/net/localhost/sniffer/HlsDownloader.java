@@ -701,6 +701,8 @@ public class HlsDownloader {
     private static String safeName(String s) {
         if (s == null || s.trim().isEmpty()) return "video_" + System.currentTimeMillis();
         s = s.replaceAll("[\\\\/:*?\"<>|\\x00-\\x1f]", "_").trim();
+        // 動画URLを直接開いた時はタイトル自体が「xxx.mp4」なので、付け足す拡張子と二重にならないよう落とす
+        s = s.replaceFirst("(?i)\\.(mp4|m3u8|ts)$", "");
         return s.length() > 80 ? s.substring(0, 80) : s;
     }
 

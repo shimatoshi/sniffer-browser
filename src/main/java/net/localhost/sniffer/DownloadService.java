@@ -19,15 +19,25 @@ import java.util.concurrent.atomic.AtomicInteger;
 /** フォアグラウンドでDLを走らせ、進捗を通知に出す */
 public class DownloadService extends Service {
 
-    private static final String CH = "dl";
+    /** 旧"dl"は重要度LOWで、通知欄下部の「サイレント」に畳まれ進捗が見えなかった。
+     *  チャンネルの重要度はアプリから上げられないので別IDで作り直す（音・振動なしのDEFAULT） */
+    private static final String CH = "dl_progress";
     private static final String ACTION_CANCEL = "net.localhost.sniffer.CANCEL";
     private static final AtomicInteger ID = new AtomicInteger(1000);
     /** 通知ID → 実行中DL。通知の「中止」ボタンから引く */
     private final Map<Integer, HlsDownloader> active = new ConcurrentHashMap<>();
-    /** 同時実行数。0→1の遷移でだけstartForeground、最後の1件が終わった時だけstopSelfする
+    /** 同時実行数。最後の1件が終わった時だけstopSelfする
      *  （複数DL中に1件終わるたびstopSelfしていた旧実装だと、進行中の他DLごとサービスが
      *  死んでforeground保護を失い、通知も進捗も突然消えるバグがあった） */
     private final AtomicInteger activeCount = new AtomicInteger(0);
+    /** foreground状態に紐付ける固定の「ダウンロード中 n件」まとめ通知。各DLの進捗通知はこの下にグループ表示する。
+     *  startForegroundService()で起動されるたびに数秒以内のstartForeground()が必須で、怠るとOSがアプリごと
+     *  強制終了して進行中のDLが全部止まる。個別DLの通知IDをforegroundに使うと付け替えで巻き添えが起きるので分離 */
+    private static final int SUMMARY_NID = 999;
+    private static final String GROUP = "net.localhost.sniffer.DL";
+    /** 画面オフ中もCPUとWi-Fiを起こしておく（無いとスリープで通信が止まりタイムアウト失敗する） */
+    private android.os.PowerManager.WakeLock wakeLock;
+    private android.net.wifi.WifiManager.WifiLock wifiLock;
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -36,6 +46,7 @@ public class DownloadService extends Service {
         if (ACTION_CANCEL.equals(intent.getAction())) {
             HlsDownloader d = active.get(intent.getIntExtra("nid", -1));
             if (d != null) d.cancel();
+            else if (activeCount.get() == 0) stopSelf(); // 古い通知から押された: 何もせず畳む
             return START_NOT_STICKY;
         }
 
@@ -51,15 +62,10 @@ public class DownloadService extends Service {
         final int nid = ID.incrementAndGet();
         ensureChannel();
         final NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        Notification n0 = build("ダウンロード開始", "準備中...", 0, true, nid);
-        if (activeCount.getAndIncrement() == 0) {
-            startForeground(nid, n0);
-        } else {
-            // 既に別DLがforeground中。ここでstartForegroundを呼び直すと
-            // 「foreground状態と紐付く通知」が付け替わり、先発DL完了時に
-            // このDLの通知が巻き添えで消えてしまう
-            nm.notify(nid, n0);
-        }
+        int n = activeCount.incrementAndGet();
+        if (n == 1) acquireLocks();
+        startForeground(SUMMARY_NID, summary(n)); // 起動のたびに必須（2件目以降も）
+        nm.notify(nid, build("ダウンロード開始", "準備中...", 0, true, nid));
 
         // サイトごとにサブディレクトリを生成して振り分ける（shimatube等、DL先が
         // Download直下に混ざらないように。ホスト名が取れない場合は直下に置く）
@@ -95,18 +101,23 @@ public class DownloadService extends Service {
                 dl.run();
             } finally {
                 active.remove(nid);
-                if (activeCount.decrementAndGet() == 0) {
-                    // 通知は個別に更新済みなので、ここではforeground状態だけ解除する
-                    // （stopForeground(true)相当だと直前に出した完了/失敗通知が消えてしまう）
-                    stopForeground(false);
+                int left = activeCount.decrementAndGet();
+                if (left == 0) {
+                    // まとめ通知だけ消す（各DLの完了/失敗通知は別IDなので残る）
+                    stopForeground(true);
+                    releaseLocks();
                     stopSelf();
+                } else {
+                    nm.notify(SUMMARY_NID, summary(left));
                 }
             }
         }
 
         public void onProgress(int pct, String msg) {
             long now = System.currentTimeMillis();
-            if (now - last < 500 && pct < 100 && pct >= 0) return;
+            // サイズ不明(pct<0)も含めて間引く。間引かないと64KBごとに通知更新が走り、
+            // OSのレート制限で更新が捨てられて進捗バーが出ない/固まる
+            if (now - last < 500 && pct < 100) return;
             last = now;
             android.util.Log.d("Sniffer", "dl#" + nid + " " + pct + "% " + msg);
             nm.notify(nid, build(title(hit), msg, pct, pct < 0, nid));
@@ -122,6 +133,40 @@ public class DownloadService extends Service {
             else nm.notify(nid, done("✗ 失敗", String.valueOf(msg)));
         }
     }
+
+    private Notification summary(int n) {
+        return builder()
+                .setContentTitle("ダウンロード中 " + n + " 件")
+                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setOngoing(true)
+                .setGroup(GROUP)
+                .setGroupSummary(true)
+                .build();
+    }
+
+    @SuppressWarnings("deprecation")
+    private void acquireLocks() {
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+            wakeLock = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "Sniffer:Download");
+            wakeLock.setReferenceCounted(false);
+            wakeLock.acquire(6 * 60 * 60 * 1000L); // 解放漏れの安全弁（6時間）
+            android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
+                    getApplicationContext().getSystemService(WIFI_SERVICE);
+            wifiLock = wm.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "Sniffer:Download");
+            wifiLock.setReferenceCounted(false);
+            wifiLock.acquire();
+        } catch (Throwable t) {
+            android.util.Log.w("Sniffer", "dl lock failed: " + t);
+        }
+    }
+
+    private void releaseLocks() {
+        try { if (wakeLock != null && wakeLock.isHeld()) wakeLock.release(); } catch (Throwable ignore) {}
+        try { if (wifiLock != null && wifiLock.isHeld()) wifiLock.release(); } catch (Throwable ignore) {}
+    }
+
+    @Override public void onDestroy() { releaseLocks(); super.onDestroy(); }
 
     private String title(MediaHit h) {
         return (h.title != null && !h.title.isEmpty()) ? h.title : "ダウンロード";
@@ -146,7 +191,9 @@ public class DownloadService extends Service {
                 .setContentTitle(title)
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.stat_sys_download)
-                .setOngoing(true);
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setGroup(GROUP);
         if (pct >= 0) b.setProgress(100, pct, indeterminate);
         else b.setProgress(0, 0, true);
         Intent ci = new Intent(this, DownloadService.class)
@@ -162,6 +209,7 @@ public class DownloadService extends Service {
                 .setContentTitle(title)
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                // グループに入れない: 最後のDL終了でまとめ通知を消すと、同グループの子も道連れで消えるため
                 .setOngoing(false)
                 .setAutoCancel(true)
                 .build();
@@ -177,8 +225,13 @@ public class DownloadService extends Service {
     private void ensureChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-            NotificationChannel ch = new NotificationChannel(CH, "ダウンロード", NotificationManager.IMPORTANCE_LOW);
-            nm.createNotificationChannel(ch);
+            if (nm.getNotificationChannel(CH) == null) {
+                NotificationChannel ch = new NotificationChannel(CH, "ダウンロード", NotificationManager.IMPORTANCE_DEFAULT);
+                ch.setSound(null, null);
+                ch.enableVibration(false);
+                nm.createNotificationChannel(ch);
+                nm.deleteNotificationChannel("dl");
+            }
         }
     }
 
