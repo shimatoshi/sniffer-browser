@@ -113,7 +113,6 @@ public class PwaActivity extends Activity {
         if (title == null || title.isEmpty()) title = homeHost;
         setTaskDescription(new ActivityManager.TaskDescription(title, null, color));
         getWindow().setStatusBarColor(color);
-        net.localhost.debugnote.DebugNote.attach(this, "pwa-" + title);
 
         web.loadUrl(url);
     }

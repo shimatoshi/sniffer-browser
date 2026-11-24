@@ -192,7 +192,6 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        net.localhost.debugnote.DebugNote.attach(this, "sniffer-browser");
 
         webContainer = findViewById(R.id.webContainer);
         setupBridgeWeb(); // CDP用の常設タブ。タブ復元より先に置いて必ず1個確保する
