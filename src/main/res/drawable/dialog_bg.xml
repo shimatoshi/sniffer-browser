@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ダイアログ共通: 角丸の面＋画面端からの余白 -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:insetLeft="16dp" android:insetRight="16dp"
+    android:insetTop="24dp" android:insetBottom="24dp">
+    <shape android:shape="rectangle">
+        <solid android:color="@color/surface_elevated" />
+        <corners android:radius="24dp" />
+    </shape>
+</inset>

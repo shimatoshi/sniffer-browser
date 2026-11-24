@@ -3,6 +3,7 @@
     android:orientation="vertical"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:focusableInTouchMode="true"
     android:background="@color/surface">
 
     <LinearLayout
@@ -26,12 +27,27 @@
             android:inputType="textUri"
             android:imeOptions="actionGo"
             android:hint="検索またはURLを入力"
+            android:drawablePadding="10dp"
             android:textColor="@color/on_surface"
             android:textColorHint="@color/on_surface_muted"
+            android:textColorHighlight="#668AB4F8"
             android:textSize="14sp"
             android:background="@drawable/omnibox_bg"
-            android:paddingLeft="16dp"
+            android:paddingLeft="14dp"
             android:paddingRight="16dp" />
+
+        <!-- 入力中だけ表示（再読み込み/DLの代わりに出す） -->
+        <ImageButton
+            android:id="@+id/btnClear"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:padding="12dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_m_close"
+            android:tint="@color/icon"
+            android:contentDescription="入力を消去"
+            android:visibility="gone"
+            android:background="?android:attr/selectableItemBackgroundBorderless" />
 
         <ImageButton
             android:id="@+id/btnReload"
@@ -44,6 +60,7 @@
             android:background="?android:attr/selectableItemBackgroundBorderless" />
 
         <FrameLayout
+            android:id="@+id/btnDlFrame"
             android:layout_width="48dp"
             android:layout_height="48dp">
 

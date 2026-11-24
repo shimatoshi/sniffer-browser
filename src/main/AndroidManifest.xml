@@ -22,14 +22,14 @@
 
     <application
         android:name=".App"
-        android:label="Gobie"
+        android:label="Sniffer"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true"
         android:hardwareAccelerated="true"
         android:largeHeap="true"
         android:requestLegacyExternalStorage="true"
-        android:theme="@android:style/Theme.Material.NoActionBar">
+        android:theme="@style/AppTheme">
 
         <activity
             android:name=".MainActivity"

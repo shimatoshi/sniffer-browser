@@ -17,6 +17,11 @@ APK_NAME="sniffer-browser"
 MIN_SDK=23
 TARGET_SDK=28
 
+# PKG_SUFFIX=.preview ./build.sh で別パッケージ名にし、ストア版と並べてインストールできる
+PKG_SUFFIX="${PKG_SUFFIX:-}"
+LINK_EXTRA=()
+[ -n "$PKG_SUFFIX" ] && LINK_EXTRA=(--rename-manifest-package "net.localhost.sniffer$PKG_SUFFIX")
+
 BUILD="build"
 rm -rf "$BUILD"
 mkdir -p "$BUILD/gen" "$BUILD/classes" "$BUILD/apk" "$BUILD/compiled-res"
@@ -34,6 +39,7 @@ $AAPT2 link \
   --min-sdk-version "$MIN_SDK" \
   --java "$BUILD/gen" \
   -o "$BUILD/base.apk" \
+  "${LINK_EXTRA[@]}" \
   $RES_ARGS
 
 echo "== javac =="

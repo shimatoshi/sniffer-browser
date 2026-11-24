@@ -31,7 +31,6 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ListView;
-import android.widget.PopupMenu;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -51,6 +50,8 @@ public class MainActivity extends Activity {
 
     private PullRefreshContainer webContainer;
     private EditText urlBar;
+    /** アドレス欄の本来のURL。非フォーカス時はドメインだけ表示するので別に持つ */
+    private String fullUrl = "";
     private Button btnTabs;
     private TextView btnDlBadge;
     private ProgressBar progress;
@@ -234,8 +235,35 @@ public class MainActivity extends Activity {
         // タップしたら現在URLを全選択状態にする(コピペしやすいように消さない)。
         // フォーカス中はページ遷移コールバックで表示を上書きしない。
         urlBar.setSelectAllOnFocus(false);
+        final View btnClear = findViewById(R.id.btnClear);
+        final View btnReload = findViewById(R.id.btnReload);
+        final View btnDlFrame = findViewById(R.id.btnDlFrame);
+        final View bottomBar = findViewById(R.id.bottomBar);
+        btnClear.setOnClickListener(v -> urlBar.setText(""));
+        // 戻るキーでキーボードだけ閉じられた場合（IMEが消費しActivityに届かない）も入力をやめる
+        final View content = findViewById(android.R.id.content);
+        final boolean[] imeShown = {false};
+        content.getViewTreeObserver().addOnGlobalLayoutListener(() -> {
+            android.graphics.Rect r = new android.graphics.Rect();
+            content.getWindowVisibleDisplayFrame(r);
+            boolean shown = content.getRootView().getHeight() - r.bottom > dp(150);
+            if (imeShown[0] && !shown && urlBar.hasFocus()) urlBar.clearFocus();
+            imeShown[0] = shown;
+        });
         urlBar.setOnFocusChangeListener((v, focused) -> {
-            if (focused) urlBar.selectAll();
+            // Chrome同様: 入力中はフルURLを全選択で出し、下部バーは隠してキーボードの上を広く使う
+            btnClear.setVisibility(focused ? View.VISIBLE : View.GONE);
+            btnReload.setVisibility(focused ? View.GONE : View.VISIBLE);
+            btnDlFrame.setVisibility(focused ? View.GONE : View.VISIBLE);
+            if (!inPip) bottomBar.setVisibility(focused ? View.GONE : View.VISIBLE);
+            if (focused) {
+                urlBar.setText(fullUrl);
+                urlBar.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, null, null);
+                // タップ直後のタッチ処理がカーソルを置き直して選択を消すので、その後に全選択する
+                urlBar.post(urlBar::selectAll);
+            } else {
+                showUrl();
+            }
         });
         // フォーカス済みの状態での再タップはonFocusChangeが発火せず選択が外れるだけなので、
         // クリックの度に明示selectAllして常に全選択状態を保証する。
@@ -262,7 +290,10 @@ public class MainActivity extends Activity {
         urlBar.setOnEditorActionListener((v, actionId, ev) -> {
             if (actionId == EditorInfo.IME_ACTION_GO ||
                     (ev != null && ev.getKeyCode() == KeyEvent.KEYCODE_ENTER)) {
-                go(urlBar.getText().toString());
+                String q = urlBar.getText().toString();
+                urlBar.clearFocus();
+                hideIme();
+                go(q);
                 return true;
             }
             return false;
@@ -491,6 +522,23 @@ public class MainActivity extends Activity {
         btnTabs.setText(String.valueOf(tabs.size())); // Chrome風: 枠付きスクエア(bg)内に数字だけ
     }
 
+    /** アイコンだけの丸リップルボタン（48dp） */
+    private android.widget.ImageButton iconButton(int icon, String desc, View.OnClickListener l) {
+        android.widget.ImageButton b = new android.widget.ImageButton(this);
+        android.graphics.drawable.Drawable d = getDrawable(icon).mutate();
+        d.setTint(getColor(R.color.icon));
+        b.setImageDrawable(d);
+        b.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+        b.setPadding(dp(12), dp(12), dp(12), dp(12));
+        android.util.TypedValue tv = new android.util.TypedValue();
+        getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, tv, true);
+        b.setBackgroundResource(tv.resourceId);
+        b.setContentDescription(desc);
+        b.setOnClickListener(l);
+        b.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
+        return b;
+    }
+
     private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density + .5f); }
 
     private void showTabs() {
@@ -498,20 +546,35 @@ public class MainActivity extends Activity {
         if (shown != null) captureThumb(shown);
         android.widget.GridView lv = new android.widget.GridView(this);
         lv.setNumColumns(2);
-        lv.setHorizontalSpacing(dp(8));
-        lv.setVerticalSpacing(dp(8));
-        lv.setPadding(dp(12), dp(8), dp(12), dp(8));
+        lv.setHorizontalSpacing(dp(12));
+        lv.setVerticalSpacing(dp(12));
+        lv.setPadding(dp(12), dp(4), dp(12), dp(16));
         lv.setClipToPadding(false);
-        AlertDialog.Builder tb = new AlertDialog.Builder(this)
-                .setTitle("タブ")
-                .setView(lv)
-                .setPositiveButton("＋ 新規タブ", (d, w) -> createTab(HOME, true))
-                .setNegativeButton("閉じる", null);
+        lv.setSelector(new android.graphics.drawable.ColorDrawable(0));
+        // Chrome同様の全画面タブ一覧: 上部バー[閉じる | n個のタブ | 閉じたタブ復活 | 新規]
+        final android.app.Dialog dlg = new android.app.Dialog(this, R.style.FullPanel);
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setBackgroundColor(getColor(R.color.surface));
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(4), 0, dp(4), 0);
+        bar.addView(iconButton(R.drawable.ic_m_arrow_back, "閉じる", v -> dlg.dismiss()));
+        final TextView count = new TextView(this);
+        count.setTextSize(18);
+        count.setTextColor(getColor(R.color.on_surface));
+        count.setPadding(dp(8), 0, 0, 0);
+        bar.addView(count, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         if (lastClosedUrl != null) {
             final String reopen = lastClosedUrl;
-            tb.setNeutralButton("↩ 閉じたタブ", (d, w) -> { lastClosedUrl = null; createTab(reopen, true); });
+            bar.addView(iconButton(R.drawable.ic_m_undo, "閉じたタブを開く", v -> {
+                lastClosedUrl = null; dlg.dismiss(); createTab(reopen, true);
+            }));
         }
-        AlertDialog dlg = tb.create();
+        bar.addView(iconButton(R.drawable.ic_m_add, "新しいタブ", v -> { dlg.dismiss(); createTab(HOME, true); }));
+        panel.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)));
+        panel.addView(lv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         BaseAdapter ad = new BaseAdapter() {
             @Override public int getCount() { return tabs.size(); }
             @Override public Object getItem(int p) { return tabs.get(p); }
@@ -520,14 +583,21 @@ public class MainActivity extends Activity {
                 Tab t = tabs.get(p);
                 LinearLayout card = new LinearLayout(MainActivity.this);
                 card.setOrientation(LinearLayout.VERTICAL);
-                card.setBackgroundColor(p == cur ? 0xFF4A6FA5 : 0xFF3C4043);
-                card.setPadding(dp(2), dp(2), dp(2), dp(2));
+                android.graphics.drawable.GradientDrawable cbg = new android.graphics.drawable.GradientDrawable();
+                cbg.setColor(getColor(R.color.surface_variant));
+                cbg.setCornerRadius(dp(16));
+                if (p == cur) { // 表示中のタブ: 枠が中身に隠れないよう内側に余白を取る
+                    cbg.setStroke(dp(2), getColor(R.color.accent));
+                    card.setPadding(dp(2), dp(2), dp(2), dp(2));
+                }
+                card.setBackground(cbg);
+                card.setClipToOutline(true);
 
                 // ヘッダ行: タイトル + ✕
                 LinearLayout head = new LinearLayout(MainActivity.this);
                 head.setOrientation(LinearLayout.HORIZONTAL);
                 head.setGravity(android.view.Gravity.CENTER_VERTICAL);
-                head.setPadding(dp(8), 0, 0, 0);
+                head.setPadding(dp(12), 0, 0, 0);
                 TextView title = new TextView(MainActivity.this);
                 String tt = (t.web != null) ? t.web.getTitle() : t.pendingTitle;
                 String uu = (t.web != null) ? t.web.getUrl() : null;
@@ -537,32 +607,35 @@ public class MainActivity extends Activity {
                 title.setSingleLine(true);
                 title.setEllipsize(android.text.TextUtils.TruncateAt.END);
                 title.setTextSize(13);
-                title.setTextColor(0xFFE8EAED);
+                title.setTextColor(getColor(R.color.on_surface));
                 head.addView(title, new LinearLayout.LayoutParams(
                         0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-                TextView close = new TextView(MainActivity.this);
-                close.setText("✕");
-                close.setTextSize(16);
-                close.setTextColor(0xFFE8EAED);
-                close.setGravity(android.view.Gravity.CENTER);
-                close.setMinWidth(dp(48));
-                close.setMinHeight(dp(48));
-                close.setContentDescription("タブを閉じる");
                 // 位置pは描画時点のもの。閉じアニメ中に他タブが閉じられるとずれるのでTabで引き直す
-                close.setOnClickListener(v -> {
+                View close = iconButton(R.drawable.ic_m_close, "タブを閉じる", v -> {
                     closeTab(tabs.indexOf(t));
                     notifyDataSetChanged();
                 });
-                head.addView(close);
+                close.setPadding(dp(12), dp(12), dp(12), dp(12));
+                head.addView(close, new LinearLayout.LayoutParams(dp(44), dp(44)));
                 card.addView(head);
 
                 android.widget.ImageView th = new android.widget.ImageView(MainActivity.this);
-                th.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
-                th.setBackgroundColor(0xFF303134);
-                if (t.thumb != null) th.setImageBitmap(t.thumb);
+                th.setBackgroundColor(getColor(R.color.divider));
+                if (t.thumb != null) {
+                    th.setImageBitmap(t.thumb);
+                    // ページ上端を基準に横幅フィット（中央切り抜きだとヘッダが見切れて判別しづらい）
+                    th.setScaleType(android.widget.ImageView.ScaleType.MATRIX);
+                    final android.graphics.Bitmap bmp = t.thumb;
+                    th.addOnLayoutChangeListener((tv, l, tp, r, b, ol, ot, or, ob) -> {
+                        android.graphics.Matrix mx = new android.graphics.Matrix();
+                        float sc = (float) (r - l) / bmp.getWidth();
+                        mx.setScale(sc, sc);
+                        ((android.widget.ImageView) tv).setImageMatrix(mx);
+                    });
+                }
                 th.setContentDescription("タブのプレビュー");
                 card.addView(th, new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, dp(140)));
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(200)));
                 card.setOnClickListener(v -> { switchTab(p); dlg.dismiss(); });
                 // 長押しでドラッグ → 別カード上でドロップして並べ替え（Chrome同様）
                 card.setOnLongClickListener(v -> {
@@ -630,7 +703,17 @@ public class MainActivity extends Activity {
             }
             return true;
         });
+        final Runnable updateCount = () -> count.setText(tabs.size() + " 個のタブ");
+        updateCount.run();
+        ad.registerDataSetObserver(new android.database.DataSetObserver() {
+            @Override public void onChanged() { updateCount.run(); }
+        });
+        dlg.setContentView(panel);
         dlg.show();
+        if (dlg.getWindow() != null)
+            dlg.getWindow().setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        // 表示中のタブが見える位置から開く
+        if (cur >= 0) lv.setSelection(cur);
     }
 
     // ---- ページ内検索 ----
@@ -663,7 +746,7 @@ public class MainActivity extends Activity {
         });
         et.setOnEditorActionListener((v, id, ev) -> { w.findNext(true); return true; });
         AlertDialog d = new AlertDialog.Builder(this)
-                .setTitle("🔍 ページ内検索")
+                .setTitle("ページ内検索")
                 .setView(box)
                 .setPositiveButton("次へ ▼", null)
                 .setNeutralButton("▲ 前へ", null)
@@ -695,70 +778,46 @@ public class MainActivity extends Activity {
     private void showMenu(View anchor) {
         Tab t = curTab();
         if (t == null) return;
-        PopupMenu pm = new PopupMenu(this, anchor);
-        Menu m = pm.getMenu();
-        // 3グループ: ①このページへの操作 ②保存したものの一覧 ③追加・ツール・設定
-        m.add(1, 2, 0, "⟳ 再読み込み");
-        m.add(1, 12, 0, t.desktop ? "📱 モバイル版に戻す" : "🖥 PC版サイト");
-        m.add(1, 17, 0, "🔍 ズーム (" + t.zoom + "%)");
-        m.add(1, 18, 0, "🔎 ページ内検索");
-        m.add(1, 19, 0, "↗ 共有");
         // YouTube動画ページなら動画DL項目を出す
         final String ytId = SnifferChrome.youtubeVideoId(web(t).getUrl());
-        if (ytId != null) {
-            m.add(1, 15, 0, "⬇ この動画をDL (ShimaTube)");
-            m.add(1, 16, 0, "♪ 音声のみDL (ShimaTube)");
-        }
-        boolean bm = db.isBookmarked(web(t).getUrl());
-        m.add(1, 3, 0, bm ? "★ ブックマーク解除" : "☆ ブックマークに追加");
-        m.add(2, 4, 0, "📑 ブックマーク");
-        m.add(2, 5, 0, "🕘 履歴");
-        m.add(2, 14, 0, "📌 固定サイト");
-        m.add(2, 13, 0, "📱 アプリ（PWA）");
-        m.add(3, 20, 0, "＋ このページを追加 ▸");
-        m.add(3, 21, 0, "🧰 ツール ▸");
-        m.add(3, 7, 0, "⚙ 設定");
-        if (Build.VERSION.SDK_INT >= 28) m.setGroupDividerEnabled(true);
-        final PopupMenu.OnMenuItemClickListener[] lis = new PopupMenu.OnMenuItemClickListener[1];
-        lis[0] = item -> {
-            switch (item.getItemId()) {
-                case 20: {
-                    PopupMenu sub = new PopupMenu(this, anchor);
-                    sub.getMenu().add(0, 9, 0, "📌 固定サイトに追加");
-                    sub.getMenu().add(0, 6, 0, "📱 PWAとしてホーム画面に追加");
-                    sub.setOnMenuItemClickListener(lis[0]);
-                    sub.show();
-                    return true;
-                }
-                case 21: {
-                    PopupMenu sub = new PopupMenu(this, anchor);
-                    sub.getMenu().add(0, 10, 0, "📦 オフライン保存");
-                    sub.getMenu().add(0, 11, 0, "📶 WiFiログイン");
-                    sub.getMenu().add(0, 8, 0, "📜 ユーザースクリプト");
-                    sub.setOnMenuItemClickListener(lis[0]);
-                    sub.show();
-                    return true;
-                }
-                case 2: web(t).reload(); return true;
+        final boolean bm = db.isBookmarked(web(t).getUrl());
+        final MenuPanel.OnPick[] lis = new MenuPanel.OnPick[1];
+        lis[0] = id -> {
+            switch (id) {
+                case 20:
+                    new MenuPanel(this, lis[0]).header("このページを追加")
+                            .item(9, R.drawable.ic_m_pin, "固定サイトに追加")
+                            .item(6, R.drawable.ic_m_add_box, "PWAとしてホーム画面に追加")
+                            .show(anchor);
+                    return;
+                case 21:
+                    new MenuPanel(this, lis[0]).header("ツール")
+                            .item(10, R.drawable.ic_m_offline, "オフライン保存")
+                            .item(11, R.drawable.ic_m_wifi, "WiFiログイン")
+                            .item(8, R.drawable.ic_m_code, "ユーザースクリプト")
+                            .show(anchor);
+                    return;
+                case 22: createTab(HOME, true); return;
+                case 2: web(t).reload(); return;
                 case 3:
                     String u = web(t).getUrl();
-                    if (u == null) return true;
+                    if (u == null) return;
                     if (bm) {
                         db.removeBookmark(u);
-                        Toast.makeText(this, "ブックマーク解除", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(this, "ブックマークを解除しました", Toast.LENGTH_SHORT).show();
                     } else {
                         db.addBookmark(u, web(t).getTitle());
-                        Toast.makeText(this, "★ 追加した", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(this, "ブックマークに追加しました", Toast.LENGTH_SHORT).show();
                     }
-                    return true;
-                case 4: showBookmarks(); return true;
-                case 5: showHistory(); return true;
-                case 6: showPwaDialog(t); return true;
-                case 7: showSettings(); return true;
-                case 8: showScripts(); return true;
-                case 9: showPinDialog(t); return true;
-                case 10: showOffline(); return true;
-                case 11: openCaptivePortal(t); return true;
+                    return;
+                case 4: showBookmarks(); return;
+                case 5: showHistory(); return;
+                case 6: showPwaDialog(t); return;
+                case 7: showSettings(); return;
+                case 8: showScripts(); return;
+                case 9: showPinDialog(t); return;
+                case 10: showOffline(); return;
+                case 11: openCaptivePortal(t); return;
                 case 12:
                     t.desktop = !t.desktop;
                     SnifferChrome.applyUaMode(web(t).getSettings(), t.desktop);
@@ -772,28 +831,49 @@ public class MainActivity extends Activity {
                             ? originOf(t.pageUrl) : null;
                     if (reentry != null) web(t).loadUrl(reentry);
                     else web(t).reload(); // ズームはロードフックのapplyPageZoomがページ種別で付け替える
-                    Toast.makeText(this, t.desktop ? "🖥 PC版で表示（このサイトは以後PC版）"
-                                    : "📱 モバイル版で表示",
+                    Toast.makeText(this, t.desktop ? "PC版で表示（このサイトは以後PC版）"
+                                    : "モバイル版で表示",
                             Toast.LENGTH_SHORT).show();
-                    return true;
-                case 13: showPwaList(); return true;
-                case 14: showPins(); return true;
+                    return;
+                case 13: showPwaList(); return;
+                case 14: showPins(); return;
                 case 15:
                     if (ytId != null)
                         SnifferChrome.downloadYoutube(this, ytId, web(t).getTitle(), false);
-                    return true;
+                    return;
                 case 16:
                     if (ytId != null)
                         SnifferChrome.downloadYoutube(this, ytId, web(t).getTitle(), true);
-                    return true;
-                case 17: showZoomDialog(t); return true;
-                case 18: showFindDialog(t); return true;
-                case 19: sharePage(t); return true;
+                    return;
+                case 17: showZoomDialog(t); return;
+                case 18: showFindDialog(t); return;
+                case 19: sharePage(t); return;
             }
-            return false;
         };
-        pm.setOnMenuItemClickListener(lis[0]);
-        pm.show();
+        MenuPanel m = new MenuPanel(this, lis[0])
+                .action(3, bm ? R.drawable.ic_m_star : R.drawable.ic_m_star_border,
+                        bm ? "ブックマーク解除" : "ブックマークに追加", bm)
+                .action(18, R.drawable.ic_m_search, "ページ内検索", false)
+                .action(19, R.drawable.ic_m_share, "共有", false)
+                .action(2, R.drawable.ic_refresh, "再読み込み", false)
+                .item(22, R.drawable.ic_m_add, "新しいタブ");
+        if (ytId != null) {
+            m.item(15, R.drawable.ic_download, "この動画をDL（ShimaTube）")
+             .item(16, R.drawable.ic_m_music, "音声のみDL（ShimaTube）");
+        }
+        m.divider()
+         .item(4, R.drawable.ic_m_bookmarks, "ブックマーク")
+         .item(5, R.drawable.ic_m_history, "履歴")
+         .item(14, R.drawable.ic_m_pin, "固定サイト")
+         .item(13, R.drawable.ic_m_apps, "アプリ（PWA）")
+         .divider()
+         .item(12, t.desktop ? R.drawable.ic_m_smartphone : R.drawable.ic_m_desktop,
+                 t.desktop ? "モバイル版に戻す" : "PC版サイト")
+         .item(17, R.drawable.ic_m_zoom, "ズーム", t.zoom + "%")
+         .sub(20, R.drawable.ic_m_add_box, "このページを追加")
+         .sub(21, R.drawable.ic_m_build, "ツール")
+         .item(7, R.drawable.ic_m_settings, "設定")
+         .show(anchor);
     }
 
     /** WiFiログイン画面（キャプティブポータル）を強制的に呼び出す。
@@ -871,7 +951,7 @@ public class MainActivity extends Activity {
                 String[] items = new String[pwas.size()];
                 for (int i = 0; i < pwas.size(); i++) items[i] = pwas.get(i).label();
                 AlertDialog dlg = new AlertDialog.Builder(this)
-                        .setTitle("📱 アプリ（長押しでメニュー）")
+                        .setTitle("アプリ（長押しでメニュー）")
                         .setItems(items, (d, w) -> openPwa(pwas.get(w)))
                         .setNegativeButton("閉じる", null)
                         .create();
@@ -893,7 +973,7 @@ public class MainActivity extends Activity {
             return;
         }
         AlertDialog dlg = new AlertDialog.Builder(this)
-                .setTitle("📌 固定サイト（長押しで解除）")
+                .setTitle("固定サイト（長押しで解除）")
                 .setAdapter(entryAdapter(pins), (d, w) -> openInCurrent(pins.get(w).url))
                 .setNegativeButton("閉じる", null)
                 .create();
@@ -918,7 +998,7 @@ public class MainActivity extends Activity {
         if (p == null) return;
         final String[] items = {
                 "開く", "🔄 アップデート（キャッシュ全消し）",
-                "⏰ スケジュール" + (PwaScheduler.hasSchedule(p) ? "（設定済）" : ""),
+                "スケジュール" + (PwaScheduler.hasSchedule(p) ? "（設定済）" : ""),
                 "🗑 削除"};
         new AlertDialog.Builder(this)
                 .setTitle(p.label())
@@ -974,7 +1054,7 @@ public class MainActivity extends Activity {
         root.addView(queueOffline);
 
         new AlertDialog.Builder(this)
-                .setTitle("⏰ " + p.label() + " のスケジュール")
+                .setTitle(p.label() + " のスケジュール")
                 .setView(root)
                 .setPositiveButton("保存", (d, w) -> {
                     StringBuilder norm = new StringBuilder();
@@ -1078,7 +1158,7 @@ public class MainActivity extends Activity {
                     String u = url.getText().toString().trim();
                     if (u.isEmpty()) return;
                     db.addPin(u, name.getText().toString().trim());
-                    Toast.makeText(this, "📌 固定した（⋮→固定サイト）", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "固定サイトに追加しました（メニュー→固定サイト）", Toast.LENGTH_SHORT).show();
                 })
                 .setNegativeButton("やめる", null)
                 .show();
@@ -1087,9 +1167,9 @@ public class MainActivity extends Activity {
     // ---- 設定（カテゴリ別） ----
 
     private void showSettings() {
-        final String[] cats = {"🔍 検索エンジン", "🛡 アドブロック", "📦 オフライン"};
+        final String[] cats = {"検索エンジン", "広告ブロック", "オフライン保存"};
         new AlertDialog.Builder(this)
-                .setTitle("⚙ 設定")
+                .setTitle("設定")
                 .setItems(cats, (d, w) -> {
                     if (w == 0) showSearchEngineSettings();
                     else if (w == 1) showAdblockSettings();
@@ -1151,7 +1231,7 @@ public class MainActivity extends Activity {
                 .setMultiChoiceItems(names, st, (d, w, checked) -> {
                     os.setAuto(checked);
                     Toast.makeText(this, checked
-                            ? "📦 オートスクレイプON（⋮→オフラインに溜まっていく）"
+                            ? "自動保存をオンにしました（メニュー→ツール→オフライン保存）"
                             : "オートスクレイプOFF", Toast.LENGTH_SHORT).show();
                 })
                 .setPositiveButton("閉じる", null)
@@ -1197,7 +1277,7 @@ public class MainActivity extends Activity {
                     + " ・ " + String.format(java.util.Locale.US, "%.1fMB", p.size / 1048576.0);
         }
         AlertDialog dlg = new AlertDialog.Builder(this)
-                .setTitle("📦 オフライン " + pages.size() + " 件")
+                .setTitle("オフライン " + pages.size() + " 件")
                 .setItems(items, (d, which) -> {
                     java.io.File f = OfflineStore.get(this).fileOf(pages.get(which));
                     if (!f.exists()) {
@@ -1295,7 +1375,7 @@ public class MainActivity extends Activity {
             if (levels[i] == t.zoom) checked = i;
         }
         new AlertDialog.Builder(this)
-                .setTitle("🔍 ページズーム")
+                .setTitle("ページズーム")
                 .setSingleChoiceItems(labels, checked, (d, w) -> {
                     t.zoom = levels[w];
                     SnifferChrome.applyPageZoom(web(t), t.zoom);
@@ -1619,7 +1699,12 @@ public class MainActivity extends Activity {
         // 直近のネイティブタッチ時刻。ClickTrackerのJSが未動作なページでの
         // フォールバック判定（旧来のジェスチャ猶予）にのみ使う
         final long[] lastGestureMs = {0};
-        web.setOnTouchListener((v, ev) -> { lastGestureMs[0] = System.currentTimeMillis(); return false; });
+        web.setOnTouchListener((v, ev) -> {
+            lastGestureMs[0] = System.currentTimeMillis();
+            // 入力中にページを触ったら入力をやめる（下部バーとドメイン表示に戻す）
+            if (ev.getActionMasked() == MotionEvent.ACTION_DOWN && urlBar.hasFocus()) { urlBar.clearFocus(); hideIme(); }
+            return false;
+        });
         ClickTracker.install(web); // クリック地点がリンクか否かの記録（リダイレクトブロック用）
         web.setWebViewClient(new WebViewClient() {
             @Override
@@ -1915,7 +2000,33 @@ public class MainActivity extends Activity {
     /** ページ側のURL更新。ユーザーが入力中なら、その入力を絶対に上書きしない。 */
     private void setUrlBar(String url) {
         if (urlBar == null || urlBar.hasFocus()) return;
-        urlBar.setText(url != null ? url : "");
+        fullUrl = url != null ? url : "";
+        showUrl();
+    }
+
+    /** 非フォーカス時の表示: スキーム/www/パスを落としたドメインだけ（https なら鍵アイコン付き） */
+    private void showUrl() {
+        String u = fullUrl;
+        String shown = u;
+        android.net.Uri uri = android.net.Uri.parse(u);
+        String scheme = uri.getScheme();
+        String host = uri.getHost();
+        boolean web = ("http".equals(scheme) || "https".equals(scheme)) && host != null;
+        if (web) shown = host.startsWith("www.") ? host.substring(4) : host;
+        urlBar.setText(shown);
+        android.graphics.drawable.Drawable ic = null;
+        if (web) {
+            ic = getDrawable("https".equals(scheme) ? R.drawable.ic_m_lock : R.drawable.ic_m_info).mutate();
+            ic.setTint(getColor(R.color.on_surface_muted));
+            ic.setBounds(0, 0, dp(16), dp(16));
+        }
+        urlBar.setCompoundDrawablesRelative(ic, null, null, null);
+    }
+
+    private void hideIme() {
+        android.view.inputmethod.InputMethodManager imm =
+                (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (imm != null) imm.hideSoftInputFromWindow(urlBar.getWindowToken(), 0);
     }
 
     private void go(String q) {
@@ -1971,6 +2082,7 @@ public class MainActivity extends Activity {
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (urlBar.hasFocus()) { urlBar.clearFocus(); hideIme(); return true; }
             Tab t = curTab();
             if (t != null) {
                 if (t.chrome.closePopup()) return true; // 認証ポップアップ表示中
