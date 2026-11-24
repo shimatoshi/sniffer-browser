@@ -37,6 +37,14 @@ public class HeadlessBrowserService extends Service {
     private static final String CH = "headless";
     private static final int NID = 7777;
     private static final long WAKE_LOCK_TIMEOUT_MS = 30 * 60 * 1000L; // 万一解放漏れしても30分で自然失効する安全弁
+    /** gobie/cdp.pyから最後に使われてからこの時間が経ったら自動で畳む（stop忘れで常駐し続け電池を食うのを防ぐ）。
+     *  次にgobieを使えば自動起動し直すので、エージェント側の使い勝手は変わらない */
+    private static final long IDLE_STOP_MS = 10 * 60 * 1000L;
+    private static final long IDLE_CHECK_MS = 60 * 1000L;
+    /** サービス側で観測できる最終使用時刻（起動指示・ページ遷移）。cdp.pyのevalだけの操作は
+     *  ページ側の window.__gobieLastUse で拾う */
+    private long lastUse;
+    private final Runnable idleCheck = this::checkIdle;
     public static final String ACTION_STOP = "net.localhost.sniffer.HEADLESS_STOP";
     public static final String ACTION_WARM = "net.localhost.sniffer.WARM_PWAS";
     public static final String ACTION_WARM_ONE = "net.localhost.sniffer.WARM_ONE_PWA";
@@ -133,6 +141,7 @@ public class HeadlessBrowserService extends Service {
         ensureChannel();
         startForeground(NID, build());
         acquireWakeLock();
+        lastUse = System.currentTimeMillis();
 
         if (web == null) ui.post(() -> setupWeb(
                 intent != null ? intent.getStringExtra("url") : null));
@@ -140,7 +149,9 @@ public class HeadlessBrowserService extends Service {
             final String u = intent.getStringExtra("url");
             ui.post(() -> web.loadUrl(u));
         }
-        return START_STICKY; // 殺されても復活させる
+        // 殺されても復活させない（復活のたびにwakelockを取り直して常駐してしまうため）。
+        // 必要になればgobieが起動し直す
+        return START_NOT_STICKY;
     }
 
     @SuppressWarnings("SetJavaScriptEnabled")
@@ -175,6 +186,7 @@ public class HeadlessBrowserService extends Service {
                 // cdp.pyがユーザータブと区別するためのマーカー。
                 // ナビゲーションごとにJSコンテキストが作り直されるので毎回打つ
                 v.evaluateJavascript("window.__gobieHeadless=true", null);
+                lastUse = System.currentTimeMillis();
             }
         });
         web.setVisibility(android.view.View.VISIBLE);
@@ -204,6 +216,40 @@ public class HeadlessBrowserService extends Service {
         }
 
         web.loadUrl(url != null ? url : "about:blank");
+        ui.removeCallbacks(idleCheck);
+        ui.postDelayed(idleCheck, IDLE_CHECK_MS);
+    }
+
+    private void checkIdle() {
+        if (web == null) return;
+        web.evaluateJavascript("window.__gobieLastUse||0", v -> {
+            long js = 0;
+            try { js = (long) Double.parseDouble(v); } catch (Throwable ignore) {}
+            long last = Math.max(lastUse, js);
+            if (System.currentTimeMillis() - last >= IDLE_STOP_MS) {
+                android.util.Log.i("Headless", "idle " + IDLE_STOP_MS / 60000 + "min → 停止");
+                stopHeadless();
+            } else {
+                ui.postDelayed(idleCheck, IDLE_CHECK_MS);
+            }
+        });
+    }
+
+    /** ヘッドレス本体を畳む。PWAが前面サービスに相乗り中ならサービス自体は残す */
+    private void stopHeadless() {
+        ui.removeCallbacks(idleCheck);
+        if (web != null) {
+            if (wm != null) try { wm.removeView(web); } catch (Throwable ignore) {}
+            web.destroy();
+            web = null;
+        }
+        releaseWakeLock();
+        if (pwaAttachCount == 0) {
+            stopForeground(true);
+            stopSelf();
+        } else {
+            ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).notify(NID, build());
+        }
     }
 
     private void ensureChannel() {
@@ -233,6 +279,7 @@ public class HeadlessBrowserService extends Service {
 
     @Override
     public void onDestroy() {
+        ui.removeCallbacks(idleCheck);
         releaseWakeLock();
         if (web != null && wm != null) {
             try { wm.removeView(web); } catch (Throwable ignore) {}

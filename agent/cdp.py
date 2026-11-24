@@ -88,6 +88,14 @@ class CDP:
         self.timeout = timeout
         self._id = 0
         self.ws = self._connect_page()
+        self._touch()
+
+    def _touch(self):
+        """アプリ側の無操作自動停止(10分)用に最終使用時刻を記録する"""
+        try:
+            self.send("Runtime.evaluate", expression="window.__gobieLastUse=Date.now()")
+        except Exception:
+            pass
 
     def _connect_page(self):
         t = find_headless_target(self.http, timeout=min(self.timeout, 8))
