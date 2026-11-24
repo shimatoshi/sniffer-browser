@@ -6,7 +6,7 @@ usage: python3 pwa_audit.py [port=9223]
 前提: adb forward tcp:<port> localabstract:webview_devtools_remote_<pid> 済み
 """
 import json, subprocess, sys, time, urllib.request
-import websocket
+import miniws as websocket
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 9223
 HTTP = f"http://127.0.0.1:{PORT}"

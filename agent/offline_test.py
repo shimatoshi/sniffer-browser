@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """news-pwaターゲットに直接繋いでSW状態確認→オフライン模擬→リロード検証"""
 import json, sys, time, urllib.request
-import websocket
+import miniws as websocket
 
 HTTP = "http://127.0.0.1:9222"
 

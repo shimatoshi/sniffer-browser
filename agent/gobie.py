@@ -17,7 +17,8 @@ import time
 import urllib.parse
 import urllib.request
 
-AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
+# ~/.local/bin/gobie はシンボリックリンクなので、実体の場所(agent/)で解決する
+AGENT_DIR = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, AGENT_DIR)
 import cdp  # noqa: E402
 from cdp import CDP, CDP_HTTP  # noqa: E402
@@ -27,7 +28,28 @@ STATE_FILE = os.path.join(STATE_DIR, "state.json")
 BRIDGE = os.path.join(AGENT_DIR, "bridge.sh")
 PKG = "net.localhost.sniffer"
 SU = os.path.expanduser("~/.sbin/su")
-ADB = ["adb", "-P", "5038", "-s", "127.0.0.1:5555"]
+
+
+def _adb_and_shell():
+    """root(su+5038番adb)があれば従来どおり、無ければ通常adbのlocalhost接続を使う（bridge.shと同じ判定）"""
+    if os.access(SU, os.X_OK):
+        return ["adb", "-P", "5038", "-s", "127.0.0.1:5555"], [SU, "-c"]
+    serial = os.environ.get("GOBIE_ADB_SERIAL")
+    if not serial:
+        try:
+            out = subprocess.run(["adb", "devices"], capture_output=True, text=True).stdout
+        except OSError:
+            out = ""
+        for line in out.splitlines()[1:]:
+            f = line.split()
+            if len(f) == 2 and f[1] == "device" and f[0].split(":")[0] in ("localhost", "127.0.0.1"):
+                serial = f[0]
+                break
+    adb = ["adb"] + (["-s", serial] if serial else [])
+    return adb, adb + ["shell"]
+
+
+ADB, SHELL = _adb_and_shell()
 
 SEARCH_URL = os.environ.get(
     "GOBIE_SEARCH", "https://www.google.com/search?q={}")
@@ -64,7 +86,7 @@ def ensure_bridge(quiet=True):
         # valid-looking forward that has no headless target behind it.
         if alive and not page:
             subprocess.run(
-                [SU, "-c",
+                SHELL + [
                  f"am start-foreground-service -n {PKG}/.HeadlessBrowserService"
                  f" --es url about:blank"],
                 capture_output=True)
@@ -196,7 +218,7 @@ def resolve_target(arg):
 
 def do_stop():
     subprocess.run(
-        [SU, "-c",
+        SHELL + [
          f"am start-foreground-service -n {PKG}/.HeadlessBrowserService"
          f" -a {PKG}.HEADLESS_STOP"],
         capture_output=True)

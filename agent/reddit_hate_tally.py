@@ -1,4 +1,5 @@
-import json, time, urllib.request, urllib.parse, websocket
+import json, time, urllib.request, urllib.parse
+import miniws as websocket
 
 FIGHTERS = {
     "Jon Jones": ('"jon jones"', "jones|jon jones"),

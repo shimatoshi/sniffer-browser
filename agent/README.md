@@ -52,4 +52,4 @@ python3 cdp.py url
 - PID が変わる（プロセス再生成）と forward が外れる → `./bridge.sh` を再実行すれば張り直す。
 - 無操作10分で自動停止する（次の gobie 実行で自動起動）。手動停止: `am start-foreground-service -n net.localhost.sniffer/.HeadlessBrowserService -a net.localhost.sniffer.HEADLESS_STOP` または force-stop。
 - **セキュリティ**: tcp:9222 は 127.0.0.1 バインドだが、localhost 上の他プロセスからこのブラウザ（＝ログインセッション）を操作できる穴になる。常用しないなら使い終わりに `adb -P 5038 -s 127.0.0.1:5555 forward --remove tcp:9222` で閉じる。
-- requires: `websocket-client`（`pip install websocket-client`。Python更新で消えたら入れ直す）, root (`~/.sbin/su`), adb (`-P 5038`).
+- requires: python3 と adb のみ（WebSocketは標準ライブラリだけの `miniws.py`）。root(`~/.sbin/su` + `adb -P 5038`)があればそれを使い、無ければワイヤレスデバッグの `adb` (localhost:5555) で動く。

@@ -1,4 +1,5 @@
-import json, time, urllib.request, urllib.parse, websocket, os
+import json, time, urllib.request, urllib.parse, os
+import miniws as websocket
 
 INST = "https://nitter.net"
 

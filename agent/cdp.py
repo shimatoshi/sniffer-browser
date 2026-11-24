@@ -26,7 +26,7 @@ import sys
 import time
 import urllib.request
 
-import websocket  # websocket-client
+import miniws as websocket  # 標準ライブラリだけのWebSocket（pip依存なし）
 
 CDP_HTTP = "http://127.0.0.1:9222"
 

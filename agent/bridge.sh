@@ -9,17 +9,27 @@ set -uo pipefail
 PKG="net.localhost.sniffer"
 PORT="${1:-9222}"
 SU="/data/data/com.termux/files/home/.sbin/su"
-ADB="adb -P 5038 -s 127.0.0.1:5555"
+# root(~/.sbin/su + 5038番のadbサーバ)があれば従来どおり。無ければ通常のadbの
+# ワイヤレスデバッグ接続(localhost:5555)で shell 経由に操作する
+if [ -x "$SU" ]; then
+  ADB="adb -P 5038 -s 127.0.0.1:5555"
+  run() { $SU -c "$*"; }
+else
+  SERIAL="${GOBIE_ADB_SERIAL:-$(adb devices 2>/dev/null | awk '$2=="device" && $1 ~ /^(localhost|127\.0\.0\.1):/ {print $1; exit}')}"
+  [ -z "$SERIAL" ] && { echo "adb接続なし（ワイヤレスデバッグで adb connect localhost:5555 を）"; exit 1; }
+  ADB="adb -s $SERIAL"
+  run() { $ADB shell "$*"; }
+fi
 
-pid() { $SU -c "pidof $PKG" 2>/dev/null | tr -d '\r' | awk '{print $1}'; }
+pid() { run "pidof $PKG" 2>/dev/null | tr -d '\r' | awk '{print $1}'; }
 
 # overlay権限（初回のみ必要、毎回入れても無害）
-$SU -c "appops set $PKG SYSTEM_ALERT_WINDOW allow" >/dev/null 2>&1
+run "appops set $PKG SYSTEM_ALERT_WINDOW allow" >/dev/null 2>&1
 
 PID="$(pid)"
 if [ -z "$PID" ]; then
   echo "未起動 → HeadlessBrowserService を起動する"
-  $SU -c "am start-foreground-service -n $PKG/.HeadlessBrowserService --es url about:blank" >/dev/null 2>&1
+  run "am start-foreground-service -n $PKG/.HeadlessBrowserService --es url about:blank" >/dev/null 2>&1
   for i in $(seq 1 10); do sleep 0.5; PID="$(pid)"; [ -n "$PID" ] && break; done
 fi
 [ -z "$PID" ] && { echo "起動失敗"; exit 1; }
@@ -27,7 +37,7 @@ fi
 SOCK="webview_devtools_remote_$PID"
 # devtoolsソケットが実際に露出するまで待つ
 for i in $(seq 1 10); do
-  $SU -c "cat /proc/net/unix" 2>/dev/null | grep -q "@$SOCK" && break
+  run "cat /proc/net/unix" 2>/dev/null | grep -q "@$SOCK" && break
   sleep 0.5
 done
 
