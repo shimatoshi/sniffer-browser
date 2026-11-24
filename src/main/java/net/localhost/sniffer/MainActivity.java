@@ -354,7 +354,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         Media.stopPlaybackService(this);
-        for (Tab t : tabs) if (t.web != null) t.web.destroy();
+        for (Tab t : tabs) if (t.web != null) { webContainer.removeView(t.web); t.web.destroy(); }
         tabs.clear();
         if (bridgeWeb != null) { bridgeWeb.destroy(); bridgeWeb = null; }
         super.onDestroy();
@@ -548,8 +548,9 @@ public class MainActivity extends Activity {
                 close.setMinWidth(dp(48));
                 close.setMinHeight(dp(48));
                 close.setContentDescription("タブを閉じる");
+                // 位置pは描画時点のもの。閉じアニメ中に他タブが閉じられるとずれるのでTabで引き直す
                 close.setOnClickListener(v -> {
-                    closeTab(p);
+                    closeTab(tabs.indexOf(t));
                     notifyDataSetChanged();
                 });
                 head.addView(close);
@@ -596,7 +597,7 @@ public class MainActivity extends Activity {
                             float dx = ev.getRawX() - down[0];
                             if (ev.getActionMasked() == MotionEvent.ACTION_UP && Math.abs(dx) > v.getWidth() / 3f) {
                                 v.animate().translationX(Math.signum(dx) * v.getWidth()).alpha(0f).setDuration(120)
-                                        .withEndAction(() -> { closeTab(p); notifyDataSetChanged(); });
+                                        .withEndAction(() -> { closeTab(tabs.indexOf(t)); notifyDataSetChanged(); });
                             } else {
                                 v.animate().translationX(0f).alpha(1f).setDuration(120);
                             }

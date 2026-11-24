@@ -596,10 +596,20 @@ public class SnifferChrome extends WebChromeClient {
     static String resolveShimatube() {
         String b = shimatubeBackend;
         if (b != null) return b;
+        org.json.JSONObject j = getJson("https://url-board.vercel.app/api/resolve/shimatube");
+        if (j == null) return null;
+        String url = j.optString("url", "");
+        if (!url.startsWith("http")) return null;
+        if (url.endsWith("/")) url = url.substring(0, url.length() - 1);
+        shimatubeBackend = url;
+        return url;
+    }
+
+    /** GETしてJSONを返す。200以外・通信失敗・パース失敗はnull */
+    private static org.json.JSONObject getJson(String url) {
         java.net.HttpURLConnection c = null;
         try {
-            c = (java.net.HttpURLConnection) new java.net.URL(
-                    "https://url-board.vercel.app/api/resolve/shimatube").openConnection();
+            c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
             c.setConnectTimeout(8000);
             c.setReadTimeout(8000);
             if (c.getResponseCode() != 200) return null;
@@ -609,18 +619,12 @@ public class SnifferChrome extends WebChromeClient {
                 int n;
                 while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
             }
-            org.json.JSONObject j = new org.json.JSONObject(bo.toString("UTF-8"));
-            String url = j.optString("url", "");
-            if (url.startsWith("http")) {
-                if (url.endsWith("/")) url = url.substring(0, url.length() - 1);
-                shimatubeBackend = url;
-                return url;
-            }
+            return new org.json.JSONObject(bo.toString("UTF-8"));
         } catch (Throwable ignore) {
+            return null;
         } finally {
             if (c != null) c.disconnect();
         }
-        return null;
     }
 
     /**
@@ -665,27 +669,10 @@ public class SnifferChrome extends WebChromeClient {
 
     /** oEmbed(APIキー不要)で動画タイトルを取得。失敗なら null */
     static String fetchYoutubeTitle(String videoId) {
-        java.net.HttpURLConnection c = null;
-        try {
-            c = (java.net.HttpURLConnection) new java.net.URL(
-                    "https://www.youtube.com/oembed?url=https%3A%2F%2Fyoutu.be%2F"
-                    + videoId + "&format=json").openConnection();
-            c.setConnectTimeout(8000);
-            c.setReadTimeout(8000);
-            if (c.getResponseCode() != 200) return null;
-            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
-            try (java.io.InputStream in = c.getInputStream()) {
-                byte[] buf = new byte[4096];
-                int n;
-                while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
-            }
-            String t = new org.json.JSONObject(bo.toString("UTF-8")).optString("title", "");
-            return t.isEmpty() ? null : t;
-        } catch (Throwable ignore) {
-            return null;
-        } finally {
-            if (c != null) c.disconnect();
-        }
+        org.json.JSONObject j = getJson("https://www.youtube.com/oembed?url=https%3A%2F%2Fyoutu.be%2F"
+                + videoId + "&format=json");
+        String t = j != null ? j.optString("title", "") : "";
+        return t.isEmpty() ? null : t;
     }
 
     /** 動画タイトルからファイル名に使えない文字を除去し、末尾の「 - YouTube」を落とす */
@@ -778,8 +765,10 @@ public class SnifferChrome extends WebChromeClient {
                             if (existing > 0) conn.setRequestProperty("Range", "bytes=" + existing + "-");
                             int code = conn.getResponseCode();
                             if (code == 206 || code == 200) {
+                                // 200 = サーバがRangeを無視して全体を返した。追記すると先頭が重複して壊れるので作り直す
+                                String mode = code == 206 ? "wa" : "wt";
                                 try (android.os.ParcelFileDescriptor pfd =
-                                            act.getContentResolver().openFileDescriptor(localUri, "wa");
+                                            act.getContentResolver().openFileDescriptor(localUri, mode);
                                      java.io.OutputStream out =
                                             new java.io.FileOutputStream(pfd.getFileDescriptor());
                                      java.io.InputStream in = conn.getInputStream()) {
@@ -796,8 +785,8 @@ public class SnifferChrome extends WebChromeClient {
                     }
                     final boolean result = ok;
                     act.runOnUiThread(() -> web.evaluateJavascript(
-                            "window.__snifferResumeDone && window.__snifferResumeDone('"
-                                    + videoId + "'," + result + ")", null));
+                            "window.__snifferResumeDone && window.__snifferResumeDone("
+                                    + org.json.JSONObject.quote(videoId) + "," + result + ")", null));
                 }).start();
             }
         }, "SnifferDL");

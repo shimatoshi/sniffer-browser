@@ -88,6 +88,7 @@ public class HlsDownloader {
         int attempt = 0;
         final int maxAttempts = 5;
         OutputStream os = null;
+        boolean ok = false;
         try {
             while (true) {
                 HttpURLConnection c = open(hit.url);
@@ -96,6 +97,7 @@ public class HlsDownloader {
                 try {
                     in = c.getInputStream();
                 } catch (java.io.IOException e) {
+                    c.disconnect();
                     if (++attempt >= maxAttempts) throw e;
                     Thread.sleep(1000L * attempt);
                     continue;
@@ -118,7 +120,7 @@ public class HlsDownloader {
                 int n;
                 try {
                     while ((n = in.read(buf)) > 0) {
-                        if (canceled) { in.close(); os.close(); out.delete(); cb.onError("中止"); return; }
+                        if (canceled) { in.close(); c.disconnect(); cb.onError("中止"); return; }
                         os.write(buf, 0, n); got += n;
                         if (len > 0) cb.onProgress((int) (got * 100 / len), "DL " + (got >> 20) + "/" + (len >> 20) + "MB");
                         else cb.onProgress(-1, "DL " + (got >> 20) + "MB");
@@ -131,8 +133,11 @@ public class HlsDownloader {
                     Thread.sleep(1000L * attempt);
                 }
             }
+            ok = true;
         } finally {
             if (os != null) os.close();
+            // 中止・失敗時は壊れた部分ファイルをDownloadに残さない
+            if (!ok) out.delete();
         }
         cb.onProgress(100, "完了");
         cb.onDone(out);
@@ -239,8 +244,7 @@ public class HlsDownloader {
                     byte[] data = httpBytesRetry(segs.get(idx).url, 3);
                     if (key != null) data = decryptAes(data, key, segs.get(idx).iv);
                     File f = new File(tmpDir, prefix + idx + ".part");
-                    FileOutputStream fo = new FileOutputStream(f);
-                    fo.write(data); fo.close();
+                    try (FileOutputStream fo = new FileOutputStream(f)) { fo.write(data); }
                     int d = done.incrementAndGet();
                     if (d % 2 == 0 || d == totalAll)
                         cb.onProgress((int) (d * 90L / totalAll), "セグメントDL " + d + "/" + totalAll);
@@ -258,16 +262,14 @@ public class HlsDownloader {
         // 連結（fMP4ならinitを先頭にプリペンド）
         cb.onProgress(91, "結合中...");
         File concat = new File(tmpDir, "all_" + prefix + (init != null ? ".mp4" : ".ts"));
-        FileOutputStream fo = new FileOutputStream(concat);
-        if (init != null) fo.write(init);
-        byte[] buf = new byte[65536];
-        for (int i = 0; i < total; i++) {
-            File f = new File(tmpDir, prefix + i + ".part");
-            InputStream is = new java.io.FileInputStream(f);
-            int n; while ((n = is.read(buf)) > 0) fo.write(buf, 0, n);
-            is.close(); f.delete();
+        try (FileOutputStream fo = new FileOutputStream(concat)) {
+            if (init != null) fo.write(init);
+            for (int i = 0; i < total; i++) {
+                File f = new File(tmpDir, prefix + i + ".part");
+                try (InputStream is = new java.io.FileInputStream(f)) { pipe(is, fo); }
+                f.delete();
+            }
         }
-        fo.close();
         return concat;
     }
 
@@ -575,10 +577,11 @@ public class HlsDownloader {
     /** UI側の画質選択用: hitのヘッダ込みでplaylistテキストを取る */
     static String fetchText(String url, MediaHit hit) throws Exception {
         HttpURLConnection c = open(url, hit);
-        InputStream in = c.getInputStream();
-        byte[] b = readAll(in);
-        in.close(); c.disconnect();
-        return new String(b, "UTF-8");
+        try (InputStream in = c.getInputStream()) {
+            return new String(readAll(in), "UTF-8");
+        } finally {
+            c.disconnect();
+        }
     }
 
     private byte[] httpBytes(String url) throws Exception {
@@ -598,13 +601,16 @@ public class HlsDownloader {
                     + " ua=" + hit.ua + " referer=" + hit.referer
                     + " cookie=" + (hit.cookie != null ? "(len=" + hit.cookie.length() + ")" : "null")
                     + " body=" + (body.length() > 300 ? body.substring(0, 300) : body));
+            c.disconnect();
             byte[] viaBridge = tryCfBridge(url);
             if (viaBridge != null) return viaBridge;
             throw e;
         }
-        byte[] b = readAll(in);
-        in.close(); c.disconnect();
-        return b;
+        try {
+            return readAll(in);
+        } finally {
+            in.close(); c.disconnect();
+        }
     }
 
     /** Cloudflare等のTLS/HTTP2フィンガープリント判別でHttpURLConnectionが弾かれた場合の救済。
@@ -656,8 +662,7 @@ public class HlsDownloader {
 
     private static byte[] readAll(InputStream in) throws Exception {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        byte[] buf = new byte[65536]; int n;
-        while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+        pipe(in, bos);
         return bos.toByteArray();
     }
 
@@ -724,11 +729,15 @@ public class HlsDownloader {
     }
 
     private static void copy(File a, File b) throws Exception {
-        InputStream in = new java.io.FileInputStream(a);
-        OutputStream out = new FileOutputStream(b);
+        try (InputStream in = new java.io.FileInputStream(a);
+             OutputStream out = new FileOutputStream(b)) {
+            pipe(in, out);
+        }
+    }
+
+    private static void pipe(InputStream in, OutputStream out) throws java.io.IOException {
         byte[] buf = new byte[65536]; int n;
         while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-        in.close(); out.close();
     }
 
     private static void deleteRec(File f) {
