@@ -1797,6 +1797,7 @@ public class MainActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap f) {
                 t.pageUrl = url;
+                t.pageTitle = ""; // 前のページのタイトルが新ページの動画の保存名に付かないように
                 if (t == curTab()) runOnUiThread(() -> { setUrlBar(url); updateDlBtn(); });
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
                 ClickTracker.inject(view); // クリック地点記録（リダイレクトブロック判定用）
@@ -1825,6 +1826,7 @@ public class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 t.pageUrl = url;
                 t.pageTitle = view.getTitle();
+                Hits.retitle(url, t.pageTitle);
                 Media.injectTracker(view);
                 ClickTracker.inject(view); // started時に注入失敗したページの保険
                 SnifferChrome.injectYoutubeNarrowFix(view, url); // started時は旧documentで消えるため再注入
@@ -1843,6 +1845,7 @@ public class MainActivity extends Activity {
                 // 指し、CDN側のホットリンク判定(Referer検証)に落ちてDLが403で失敗する。
                 // doUpdateVisitedHistoryはSPA遷移でも呼ばれるのでここでも追従させる。
                 t.pageUrl = url;
+                t.pageTitle = view.getTitle();
                 if (t == curTab()) runOnUiThread(() -> { setUrlBar(url); updateDlBtn(); });
             }
             // メインフレームの通信失敗は、WebView標準の素のエラー表示ではなく
@@ -1906,6 +1909,7 @@ public class MainActivity extends Activity {
             }
             @Override public void onReceivedTitle(WebView view, String title) {
                 t.pageTitle = title;
+                Hits.retitle(t.pageUrl, title); // 先に検出した動画の保存名を正しいタイトルに
             }
             @Override protected void openUrl(String url) {
                 createTab(url, true); // window.open/target=_blank は新規タブで開く
@@ -1942,7 +1946,10 @@ public class MainActivity extends Activity {
 
     private void startDownload(MediaHit h) {
         WebView w = curWeb();
-        if ((h.title == null || h.title.isEmpty()) && w != null) h.title = w.getTitle();
+        Tab t = curTab();
+        // 補完は検出元ページを表示中の時だけ（別ページのタイトルを付けない）
+        if ((h.title == null || h.title.isEmpty()) && w != null && t != null
+                && t.pageUrl != null && t.pageUrl.equals(h.page)) h.title = w.getTitle();
         if (!"m3u8".equals(h.type)) { launchDownload(h); return; }
         // m3u8はまずplaylistを覗き、masterで複数画質あれば選択ダイアログを出す
         Toast.makeText(this, "画質を確認中...", Toast.LENGTH_SHORT).show();

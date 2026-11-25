@@ -20,7 +20,13 @@ public class Hits {
 
     public static synchronized boolean add(MediaHit h) {
         if (h == null || h.url == null) return false;
-        if (map.containsKey(h.url)) return false;
+        MediaHit old = map.get(h.url);
+        if (old != null) {
+            // 別ページで同じ動画URLを再検出したら、最新のページに付け替える
+            // （古いページの所属のままだと今のページの一覧に出てこない）
+            if (h.page == null || h.page.equals(old.page)) return false;
+            map.remove(h.url);
+        }
         map.put(h.url, h);
         if (listener != null) listener.onCount(map.size());
         return true;
@@ -31,16 +37,38 @@ public class Hits {
     }
 
     /**
-     * 表示中ページと同一ホストで検出したヒットだけ返す（DL欄のサイト追従用）。
+     * 表示中ページで検出したヒットだけ返す（DL欄のページ追従用）。
+     * 同一ホストで絞ると同じサイトの前のページの動画が残り続けるため、ページURL単位で絞る。
      * pageUrlが非http（ホーム等）の時は全件。
      */
     public static synchronized List<MediaHit> forPage(String pageUrl) {
-        String host = hostOf(pageUrl);
-        if (host == null) return new ArrayList<>(map.values());
+        if (hostOf(pageUrl) == null) return new ArrayList<>(map.values());
+        String key = pageKey(pageUrl);
         List<MediaHit> out = new ArrayList<>();
         for (MediaHit h : map.values())
-            if (host.equals(hostOf(h.page))) out.add(h);
+            if (key.equals(pageKey(h.page))) out.add(h);
         return out;
+    }
+
+    /**
+     * ページのタイトル確定時に、そのページで検出済みのヒットへタイトルを入れる。
+     * 動画リクエストはタイトル受信より先に飛ぶことが多く、検出時点のタイトルは
+     * 空か前のページのものになっているため、ここで正しい保存名に直す。
+     */
+    public static synchronized void retitle(String pageUrl, String title) {
+        if (title == null || title.trim().isEmpty() || hostOf(pageUrl) == null) return;
+        // 読み込み中はタイトル未設定でURLがタイトル代わりに返ることがある
+        if (title.startsWith("http://") || title.startsWith("https://")) return;
+        String key = pageKey(pageUrl);
+        for (MediaHit h : map.values())
+            if (key.equals(pageKey(h.page))) h.title = title;
+    }
+
+    /** ページ同一判定用のキー（#以降は同じページ内の位置なので無視） */
+    private static String pageKey(String url) {
+        if (url == null) return "";
+        int i = url.indexOf('#');
+        return i >= 0 ? url.substring(0, i) : url;
     }
 
     public static int countFor(String pageUrl) { return forPage(pageUrl).size(); }

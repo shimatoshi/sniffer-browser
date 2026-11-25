@@ -216,6 +216,7 @@ public class PwaActivity extends Activity {
                     Dbg.log(PwaActivity.this, "PWA yt guard: give up, stay on m");
                 }
                 pageUrl = url;
+                pageTitle = ""; // 前ページのタイトルが新ページの動画の保存名に付かないように
                 SnifferChrome.injectBlobGuard(view); // blob DL救済(revoke遅延)
                 ClickTracker.inject(view); // クリック地点記録（ポップアップ遮断判定用）
                 SnifferChrome.injectYoutubeAdblock(view, url); // YouTube動画内広告の除去(YouTube PWA対応)
@@ -229,6 +230,7 @@ public class PwaActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 pageUrl = url;
                 pageTitle = view.getTitle();
+                Hits.retitle(url, pageTitle);
                 Media.injectTracker(view);
                 SnifferChrome.injectYoutubeNarrowFix(view, url); // started時は旧documentで消えるため再注入
                 if (zoom != 100) SnifferChrome.applyPageZoom(view, zoom);
@@ -241,12 +243,14 @@ public class PwaActivity extends Activity {
                 // SPAのpushState遷移はonPageStarted/Finishedが発火しない→pageUrlが固着し、
                 // Hits.sniffのReferer代替値が古いページを指してCDNのホットリンク判定に落ちる
                 pageUrl = url;
+                pageTitle = view.getTitle();
             }
         });
 
         chrome = new SnifferChrome(this, web) {
             @Override public void onReceivedTitle(WebView view, String title) {
                 pageTitle = title;
+                Hits.retitle(pageUrl, title);
             }
             @Override protected void openUrl(String url) {
                 // window.open/target=_blank。非Webスキームは外部アプリへ、http(s)は枠付きオーバーレイで開く
