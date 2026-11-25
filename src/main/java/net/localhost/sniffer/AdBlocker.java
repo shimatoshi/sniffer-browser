@@ -63,7 +63,7 @@ public class AdBlocker {
     private static final String[][] SOURCES = {
             {"280blocker.txt", "https://280blocker.net/files/280blocker_domain.txt"},
             {"adguard-dns.txt", "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt"},
-            {"hagezi-light.txt", "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/light.txt"},
+            {"hagezi-light.txt", "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/light-onlydomains.txt"},
             {"easylist.txt", "https://easylist.to/easylist/easylist.txt"},
             {"adguard-jp.txt", "https://filters.adtidy.org/extension/ublock/filters/7.txt"},
     };
@@ -124,7 +124,30 @@ public class AdBlocker {
         // 数十万行のリスト解析＋DB openは重く、onCreate上で同期実行すると起動が固まる。
         // 各集合はvolatileで空初期化済みなので、初回ロードは別スレッドへ逃がす
         // （ロード完了までの一瞬だけシードが未適用になるが、起動直後のホームはローカルdata）。
-        new Thread(this::reload).start();
+        new Thread(() -> { reload(); autoUpdate(); }).start();
+    }
+
+    private static final long UPDATE_INTERVAL_MS = 7L * 24 * 3600 * 1000;
+    private static final long RETRY_INTERVAL_MS = 6L * 3600 * 1000;
+
+    /**
+     * フィルターが未取得か古ければ裏で取り直す。手動更新しか無かった頃は、
+     * 再インストール等でfilters/が消えるとシード40件だけで動き続け、広告が素通りしていた。
+     * 失敗時は起動のたびに数MBを取りに行かないよう、試行間隔を空ける。
+     */
+    private void autoUpdate() {
+        long now = System.currentTimeMillis();
+        if (now - sp.getLong("filterTriedAt", 0) < RETRY_INTERVAL_MS) return;
+        File[] files = filterDir().listFiles();
+        long newest = 0;
+        if (files != null) for (File f : files) newest = Math.max(newest, f.lastModified());
+        if (newest > 0 && now - newest < UPDATE_INTERVAL_MS) return;
+        sp.edit().putLong("filterTriedAt", now).apply();
+        try {
+            Dbg.log(app, "AdBlock 自動更新: " + update());
+        } catch (Throwable e) {
+            Dbg.log(app, "AdBlock 自動更新失敗: " + e);
+        }
     }
 
     // ---- 設定トグル ----
