@@ -289,8 +289,16 @@ def main(argv):
             q = " ".join(args)
             if not q:
                 sys.exit("error: 検索キーワードが必要")
-            c.goto(SEARCH_URL.format(urllib.parse.quote(q)))
-            c.wait("a h3", timeout=10)
+            c.eval("window.__gobieOld=1")  # 前のページの一覧を拾わないための印
+            c.goto(SEARCH_URL.format(urllib.parse.quote(q)), wait_load=False)
+            # 結果の一覧が取れた時点で待ちを終える。今のモバイル版 Google には
+            # a h3 が無く、h3 待ちだと毎回10秒のタイムアウトまで待っていた
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                if (c.eval("window.__gobieOld!==1&&document.readyState!='loading'")
+                        and json.loads(c.eval(LINKS_JS) or "{}").get("links")):
+                    break
+                time.sleep(0.2)
             return do_list(c)
         elif cmd == "list":
             return do_list(c, args[0] if args else None)
