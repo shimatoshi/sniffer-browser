@@ -26,7 +26,7 @@ from cdp import CDP, CDP_HTTP  # noqa: E402
 STATE_DIR = os.path.expanduser("~/.cache/gobie")
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
 BRIDGE = os.path.join(AGENT_DIR, "bridge.sh")
-PKG = "net.localhost.sniffer"
+PKG = os.environ.get("GOBIE_PKG", "net.localhost.sniffer")
 SU = os.path.expanduser("~/.sbin/su")
 
 
@@ -87,7 +87,7 @@ def ensure_bridge(quiet=True):
         if alive and not page:
             subprocess.run(
                 SHELL + [
-                 f"am start-foreground-service -n {PKG}/.HeadlessBrowserService"
+                 f"am start-foreground-service -n {PKG}/net.localhost.sniffer.HeadlessBrowserService"
                  f" --es url about:blank"],
                 capture_output=True)
         r = subprocess.run([BRIDGE], capture_output=True, text=True)
@@ -219,7 +219,7 @@ def resolve_target(arg):
 def do_stop():
     subprocess.run(
         SHELL + [
-         f"am start-foreground-service -n {PKG}/.HeadlessBrowserService"
+         f"am start-foreground-service -n {PKG}/net.localhost.sniffer.HeadlessBrowserService"
          f" -a {PKG}.HEADLESS_STOP"],
         capture_output=True)
     subprocess.run(ADB + ["forward", "--remove", "tcp:9222"],

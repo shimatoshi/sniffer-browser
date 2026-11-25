@@ -54,6 +54,10 @@ public class HeadlessBrowserService extends Service {
     public static final String ACTION_PWA_DETACH = "net.localhost.sniffer.PWA_DETACH";
 
     private WebView web;
+    /** 同時に並行して読み込むための追加の WebView（search_api の並列取得用）。
+     *  起動指示の "pool" で総数を指定する。web が 0 番、ここが 1 番以降 */
+    private final java.util.ArrayList<WebView> extra = new java.util.ArrayList<>();
+    private static final int MAX_POOL = 6;
     private WindowManager wm;
     private PowerManager.WakeLock wakeLock;
     private int pwaAttachCount = 0;
@@ -149,16 +153,27 @@ public class HeadlessBrowserService extends Service {
             final String u = intent.getStringExtra("url");
             ui.post(() -> web.loadUrl(u));
         }
+        final int pool = intent != null ? Math.min(intent.getIntExtra("pool", 1), MAX_POOL) : 1;
+        ui.post(() -> {
+            if (web == null) return;
+            while (extra.size() < pool - 1) extra.add(newWeb(extra.size() + 1, "about:blank"));
+        });
         // 殺されても復活させない（復活のたびにwakelockを取り直して常駐してしまうため）。
         // 必要になればgobieが起動し直す
         return START_NOT_STICKY;
     }
 
-    @SuppressWarnings("SetJavaScriptEnabled")
     private void setupWeb(String url) {
         if (Build.VERSION.SDK_INT >= 19) WebView.setWebContentsDebuggingEnabled(true);
+        web = newWeb(0, url);
+        ui.removeCallbacks(idleCheck);
+        ui.postDelayed(idleCheck, IDLE_CHECK_MS);
+    }
 
-        web = new WebView(this);
+    /** 画面外に置いた CDP 操作用の WebView を1枚作る。slot は cdp.py が見分ける番号 */
+    @SuppressWarnings("SetJavaScriptEnabled")
+    private WebView newWeb(final int slot, String url) {
+        final WebView web = new WebView(this);
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
@@ -169,6 +184,9 @@ public class HeadlessBrowserService extends Service {
         if (Build.VERSION.SDK_INT >= 21)
             s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         SnifferChrome.applyChromeUa(s);
+        // 並列取得用の追加分は文字を読むだけなので画像を読まない（同じレンダラを取り合うので軽くする）。
+        // 0番は gobie のスクリーンショットなどに使うので従来どおり
+        if (slot > 0) s.setBlockNetworkImage(true);
 
         CookieManager cm = CookieManager.getInstance();
         cm.setAcceptCookie(true);
@@ -185,14 +203,14 @@ public class HeadlessBrowserService extends Service {
             public void onPageStarted(WebView v, String url, android.graphics.Bitmap favicon) {
                 // cdp.pyがユーザータブと区別するためのマーカー。
                 // ナビゲーションごとにJSコンテキストが作り直されるので毎回打つ
-                v.evaluateJavascript("window.__gobieHeadless=true", null);
+                v.evaluateJavascript("window.__gobieHeadless=true;window.__gobieSlot=" + slot, null);
                 lastUse = System.currentTimeMillis();
             }
         });
         web.setVisibility(android.view.View.VISIBLE);
 
         // 画面サイズで実寸レンダリング（モバイルサイトに正しいviewportを見せる）
-        wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+        if (wm == null) wm = (WindowManager) getSystemService(WINDOW_SERVICE);
         DisplayMetrics dm = new DisplayMetrics();
         wm.getDefaultDisplay().getMetrics(dm);
 
@@ -216,28 +234,42 @@ public class HeadlessBrowserService extends Service {
         }
 
         web.loadUrl(url != null ? url : "about:blank");
-        ui.removeCallbacks(idleCheck);
-        ui.postDelayed(idleCheck, IDLE_CHECK_MS);
+        return web;
     }
 
     private void checkIdle() {
         if (web == null) return;
-        web.evaluateJavascript("window.__gobieLastUse||0", v -> {
-            long js = 0;
-            try { js = (long) Double.parseDouble(v); } catch (Throwable ignore) {}
-            long last = Math.max(lastUse, js);
-            if (System.currentTimeMillis() - last >= IDLE_STOP_MS) {
-                android.util.Log.i("Headless", "idle " + IDLE_STOP_MS / 60000 + "min → 停止");
-                stopHeadless();
-            } else {
-                ui.postDelayed(idleCheck, IDLE_CHECK_MS);
-            }
-        });
+        // どの WebView が使われていても「使用中」とみなす（並列取得では 0 番が休んでいることがある）
+        final java.util.ArrayList<WebView> all = new java.util.ArrayList<>(extra);
+        all.add(0, web);
+        final long[] last = {lastUse};
+        final int[] left = {all.size()};
+        for (WebView w : all) {
+            w.evaluateJavascript("window.__gobieLastUse||0", v -> {
+                try { last[0] = Math.max(last[0], (long) Double.parseDouble(v)); } catch (Throwable ignore) {}
+                if (--left[0] > 0 || web == null) return;
+                if (System.currentTimeMillis() - last[0] >= IDLE_STOP_MS) {
+                    android.util.Log.i("Headless", "idle " + IDLE_STOP_MS / 60000 + "min → 停止");
+                    stopHeadless();
+                } else {
+                    ui.postDelayed(idleCheck, IDLE_CHECK_MS);
+                }
+            });
+        }
+    }
+
+    private void destroyWebs() {
+        for (WebView w : extra) {
+            if (wm != null) try { wm.removeView(w); } catch (Throwable ignore) {}
+            w.destroy();
+        }
+        extra.clear();
     }
 
     /** ヘッドレス本体を畳む。PWAが前面サービスに相乗り中ならサービス自体は残す */
     private void stopHeadless() {
         ui.removeCallbacks(idleCheck);
+        destroyWebs();
         if (web != null) {
             if (wm != null) try { wm.removeView(web); } catch (Throwable ignore) {}
             web.destroy();
@@ -281,6 +313,7 @@ public class HeadlessBrowserService extends Service {
     public void onDestroy() {
         ui.removeCallbacks(idleCheck);
         releaseWakeLock();
+        destroyWebs();
         if (web != null && wm != null) {
             try { wm.removeView(web); } catch (Throwable ignore) {}
             web.destroy();

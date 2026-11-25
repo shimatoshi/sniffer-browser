@@ -6,7 +6,7 @@
 #   ./bridge.sh 9222       # ポート指定
 set -uo pipefail
 
-PKG="net.localhost.sniffer"
+PKG="${GOBIE_PKG:-net.localhost.sniffer}"
 PORT="${1:-9222}"
 SU="/data/data/com.termux/files/home/.sbin/su"
 # root(~/.sbin/su + 5038番のadbサーバ)があれば従来どおり。無ければ通常のadbの
@@ -29,7 +29,7 @@ run "appops set $PKG SYSTEM_ALERT_WINDOW allow" >/dev/null 2>&1
 PID="$(pid)"
 if [ -z "$PID" ]; then
   echo "未起動 → HeadlessBrowserService を起動する"
-  run "am start-foreground-service -n $PKG/.HeadlessBrowserService --es url about:blank" >/dev/null 2>&1
+  run "am start-foreground-service -n $PKG/net.localhost.sniffer.HeadlessBrowserService --es url about:blank" >/dev/null 2>&1
   for i in $(seq 1 10); do sleep 0.5; PID="$(pid)"; [ -n "$PID" ] && break; done
 fi
 [ -z "$PID" ] && { echo "起動失敗"; exit 1; }

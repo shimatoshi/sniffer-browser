@@ -32,7 +32,12 @@ CDP_HTTP = "http://127.0.0.1:9222"
 
 
 def _probe_headless(ws_url, timeout=8):
-    """page targetに短時間接続して window.__gobieHeadless マーカーを確認する。
+    return _probe_slot(ws_url, timeout) is not None
+
+
+def _probe_slot(ws_url, timeout=8):
+    """ヘッドレスの WebView なら番号（window.__gobieSlot、旧アプリは0）を、違えば None を返す。
+    page targetに短時間接続して window.__gobieHeadless マーカーを確認する。
     読み取りevalのみ（副作用なし）。応答しないタブ（凍結中など）はFalse扱い。
     timeoutは呼び出し側のCDP.timeoutに合わせて可変にする(旧固定3秒は端末のメモリ逼迫時に
     WebViewのJSスレッド応答が間に合わずtarget誤判定=接続失敗の主因だった、2026-07-18判明)。"""
@@ -42,22 +47,38 @@ def _probe_headless(ws_url, timeout=8):
         try:
             ws.send(json.dumps({
                 "id": 1, "method": "Runtime.evaluate",
-                "params": {"expression": "window.__gobieHeadless===true",
+                "params": {"expression": "window.__gobieHeadless===true"
+                           "?(window.__gobieSlot||0):-1",
                            "returnByValue": True}}))
             deadline = time.time() + timeout
             while time.time() < deadline:
                 msg = json.loads(ws.recv())
                 if msg.get("id") == 1:
-                    return bool(msg.get("result", {})
-                                .get("result", {}).get("value"))
+                    v = msg.get("result", {}).get("result", {}).get("value")
+                    return v if isinstance(v, int) and v >= 0 else None
         finally:
             ws.close()
     except Exception:
         pass
-    return False
+    return None
 
 
-def find_headless_target(http=CDP_HTTP, timeout=8, retries=2):
+def headless_targets(http=CDP_HTTP, timeout=8):
+    """ヘッドレスの WebView 全部を {番号: target} で返す（並列取得用に複数枚あることがある）"""
+    try:
+        targets = json.load(urllib.request.urlopen(http + "/json", timeout=timeout))
+    except Exception:
+        return {}
+    out = {}
+    for t in targets:
+        if t.get("type") == "page" and t.get("webSocketDebuggerUrl"):
+            k = _probe_slot(t["webSocketDebuggerUrl"], timeout=timeout)
+            if k is not None and k not in out:
+                out[k] = t
+    return out
+
+
+def find_headless_target(http=CDP_HTTP, timeout=8, retries=2, slot=None):
     """HeadlessBrowserServiceのWebViewのtargetを返す。見つからなければNone。
     MainActivityのユーザータブを誤って掴まないよう、マーカーで厳密に識別する。
     メモリ逼迫でJS応答が一時的に遅れるだけで実際には生きているケースがあるため、
@@ -70,9 +91,17 @@ def find_headless_target(http=CDP_HTTP, timeout=8, retries=2):
         if targets:
             pages = [t for t in targets
                      if t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
+            found = {}
             for t in pages:
-                if _probe_headless(t["webSocketDebuggerUrl"], timeout=timeout):
-                    return t
+                k = _probe_slot(t["webSocketDebuggerUrl"], timeout=timeout)
+                if k is not None:
+                    found.setdefault(k, t)
+                    if k == (slot or 0):
+                        return t
+            if found and slot is None:  # 0番が無ければ他のヘッドレスでよい
+                return found[min(found)]
+            if slot:  # 番号指定のときは取り違えないよう about:blank の保険は使わない
+                pages = []
             # マーカー未注入の旧APK/起動直後への保険: about:blank はヘッドレス初期状態
             for t in pages:
                 if t.get("url") in ("", "about:blank"):
@@ -83,9 +112,10 @@ def find_headless_target(http=CDP_HTTP, timeout=8, retries=2):
 
 
 class CDP:
-    def __init__(self, http=CDP_HTTP, timeout=30):
+    def __init__(self, http=CDP_HTTP, timeout=30, slot=None):
         self.http = http
         self.timeout = timeout
+        self.slot = slot
         self._id = 0
         self.ws = self._connect_page()
         self._touch()
@@ -98,7 +128,7 @@ class CDP:
             pass
 
     def _connect_page(self):
-        t = find_headless_target(self.http, timeout=min(self.timeout, 8))
+        t = find_headless_target(self.http, timeout=min(self.timeout, 8), slot=self.slot)
         if t is None:
             raise RuntimeError(
                 "headless target が見つからない（ユーザータブは操作しない）。"
